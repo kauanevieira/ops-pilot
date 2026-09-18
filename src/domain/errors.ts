@@ -20,3 +20,16 @@ export class IncidentAlreadyResolvedError extends DomainError {
     this.name = "IncidentAlreadyResolvedError";
   }
 }
+
+/**
+ * Distinct from ServiceNotFoundError (FR-029a): a service that exists but
+ * has no runbook written is a different message to whoever is on call than
+ * a service that doesn't exist at all — the first says "no procedure is
+ * written for this", the second says "check the name, this isn't real".
+ */
+export class RunbookNotFoundError extends DomainError {
+  constructor(serviceId: string) {
+    super(`Runbook not found for service: ${serviceId}`);
+    this.name = "RunbookNotFoundError";
+  }
+}

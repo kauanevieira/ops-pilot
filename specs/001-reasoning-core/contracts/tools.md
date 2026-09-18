@@ -2,6 +2,11 @@
 
 **Feature**: `001-reasoning-core` | Satisfies FR-011 a FR-015
 
+> ⚠️ **Substituído pela feature `004-sqlite-persistence`**: as três ferramentas descritas
+> abaixo permanecem como registro histórico desta entrega, mas o contrato vigente — com
+> essas três revisadas e mais duas novas (`list_incidents`, `consultar_runbook`) — é
+> [`specs/004-sqlite-persistence/contracts/ops-tools.md`](../../004-sqlite-persistence/contracts/ops-tools.md).
+
 Três ferramentas expostas às estratégias. Toda entrada é validada por esquema zod antes
 de qualquer efeito sobre o estado (FR-014, SC-008).
 

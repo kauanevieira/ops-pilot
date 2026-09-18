@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { z } from "zod";
-import { alertSchema, incidentSchema, serviceSchema } from "../domain/schemas.ts";
+import { alertSchema, incidentSchema, runbookSchema, serviceSchema } from "../domain/schemas.ts";
 import type { WorldState } from "./types.ts";
 
 const SEED_FILE_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "seed.json");
@@ -18,6 +18,7 @@ const seedFileSchema = z.object({
   incidents: z.array(
     incidentSchema.extend({ openedAt: z.coerce.date(), resolvedAt: z.coerce.date().nullable() }),
   ),
+  runbooks: z.array(runbookSchema),
 });
 
 /**

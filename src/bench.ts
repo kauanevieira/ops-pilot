@@ -90,7 +90,10 @@ async function main(): Promise<void> {
     for (const factory of STRATEGY_FACTORIES) {
       // Fresh, independently-seeded state per (scenario, strategy) pair —
       // the same guarantee arena.ts gives its runs, so nothing here leaks
-      // into another combination's store.
+      // into another combination's store. Deliberately in-memory (R-014,
+      // 004-sqlite-persistence): Scenario.check(initial, final) compares
+      // WorldState snapshots, and a durable store would make repeated runs
+      // diverge instead of reproducing the same scored outcome (FR-030).
       const initial = benchBaselineState();
       const store = new InMemoryOpsRepository(initial);
       const strategy = factory.create(store, args.noReplanner);

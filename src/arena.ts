@@ -69,6 +69,8 @@ async function main(): Promise<void> {
 
   for (const name of args.strategies) {
     // Fresh, independently-seeded state per strategy so runs never interfere (FR-030).
+    // Deliberately in-memory, not SqliteOpsStore (R-014, 004-sqlite-persistence): a
+    // durable store would let the second strategy see incidents the first one opened.
     const store = new InMemoryOpsRepository(baselineState());
     const strategy = createStrategy(name, store);
 

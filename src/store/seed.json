@@ -1,10 +1,10 @@
 {
   "services": [
-    { "id": "checkout", "name": "Checkout" },
-    { "id": "payments", "name": "Payments" },
-    { "id": "auth", "name": "Auth" },
-    { "id": "search", "name": "Search" },
-    { "id": "notifications", "name": "Notifications" }
+    { "id": "checkout", "name": "Checkout", "tier": "tier-1" },
+    { "id": "payments", "name": "Payments", "tier": "tier-1" },
+    { "id": "auth", "name": "Auth", "tier": "tier-1" },
+    { "id": "search", "name": "Search", "tier": "tier-2" },
+    { "id": "notifications", "name": "Notifications", "tier": "tier-3" }
   ],
   "alerts": [
     {
@@ -56,5 +56,38 @@
       "firedAt": "2026-01-01T00:25:00.000Z"
     }
   ],
-  "incidents": []
+  "incidents": [],
+  "runbooks": [
+    {
+      "serviceId": "checkout",
+      "title": "Checkout indisponível ou com erros",
+      "steps": [
+        "Confirme o alerta em list_alerts antes de agir: descarte ruído de monitoramento.",
+        "Verifique o painel de erros do checkout nas últimas 2 horas.",
+        "Se a taxa de erro 5xx passar de 5%, abra um incidente com severidade critical.",
+        "Acione o time de pagamentos se o erro estiver concentrado na etapa de cobrança.",
+        "Registre no incidente o serviço afetado e o horário em que o erro começou."
+      ]
+    },
+    {
+      "serviceId": "payments",
+      "title": "Latência ou falha no gateway de pagamentos",
+      "steps": [
+        "Verifique o status público do provedor de pagamentos externo.",
+        "Se o provedor estiver operacional, verifique a fila de retries do serviço.",
+        "Abra um incidente com severidade high se a latência p95 passar de 3s.",
+        "Se o provedor estiver fora do ar, registre a dependência externa no resumo do incidente."
+      ]
+    },
+    {
+      "serviceId": "auth",
+      "title": "Falhas de login acima do normal",
+      "steps": [
+        "Descarte ataque de força bruta: verifique concentração de falhas por IP.",
+        "Se for ataque, acione o time de segurança antes de abrir incidente operacional.",
+        "Se for falha genuína de autenticação, verifique a conexão com o provedor de identidade.",
+        "Abra um incidente com a severidade proporcional à fração de usuários afetados."
+      ]
+    }
+  ]
 }

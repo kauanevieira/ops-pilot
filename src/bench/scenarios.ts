@@ -9,7 +9,7 @@ import type { WorldState } from "../store/types.ts";
  * the bench scenarios see it, because C2 needs a third real service to
  * open an incident against.
  */
-const CATALOG_SERVICE: Service = { id: "catalog", name: "Catalog" };
+const CATALOG_SERVICE: Service = { id: "catalog", name: "Catalog", tier: "tier-2" };
 
 export function benchBaselineState(): WorldState {
   const base = baselineState();
