@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { InMemoryOpsRepository } from "./store/in-memory.ts";
 import { baselineState } from "./store/seed.ts";
-import { availableStrategyNames, createStrategy, defaultStrategyNames, DEFAULT_MAX_ITERATIONS } from "./agents/registry.ts";
+import { availableStrategyNames, createStrategy, defaultStrategyNames, DEFAULT_MAX_ITERATIONS } from "./agents/index.ts";
 import { formatMetrics, formatTrace } from "./trace/format.ts";
 
 const argsSchema = z.object({

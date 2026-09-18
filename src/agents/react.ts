@@ -43,7 +43,12 @@ export function createReactStrategy(store: OpsRepository): ReasoningStrategy {
       try {
         const stream = await agent.stream(
           { messages: [{ role: "user", content: input }] },
-          { recursionLimit: toRecursionLimit(maxIterations), callbacks: [counter], streamMode: "values" },
+          {
+            recursionLimit: toRecursionLimit(maxIterations),
+            callbacks: [counter],
+            streamMode: "values",
+            signal: options?.signal,
+          },
         );
         for await (const chunk of stream) {
           lastMessages = (chunk as { messages: BaseMessage[] }).messages;

@@ -69,7 +69,7 @@ export function createPlanAndExecuteStrategy(
             ["system", PLANNER_PROMPT],
             ["user", state.input],
           ],
-          { callbacks: [counter] },
+          { callbacks: [counter], signal: options?.signal },
         );
         return {
           plan: plan.steps,
@@ -87,7 +87,7 @@ export function createPlanAndExecuteStrategy(
         const stepAgent = createReactAgent({ llm: createModel(), tools });
         const stepResult = await stepAgent.invoke(
           { messages: [{ role: "user", content: step }] },
-          { recursionLimit: 5, callbacks: [counter] },
+          { recursionLimit: 5, callbacks: [counter], signal: options?.signal },
         );
         // messagesToTrace labels the last AI message "answer", which is right
         // for a top-level strategy but wrong here: this is one step's own
@@ -119,7 +119,7 @@ export function createPlanAndExecuteStrategy(
               JSON.stringify({ input: state.input, done: state.done, plan: state.plan }),
             ],
           ],
-          { callbacks: [counter] },
+          { callbacks: [counter], signal: options?.signal },
         );
 
         if (replan.decision === "encerrar") {
@@ -180,7 +180,7 @@ export function createPlanAndExecuteStrategy(
       try {
         const stream = await graph.stream(
           { input },
-          { recursionLimit: toRecursionLimit(maxIterations), streamMode: "values" },
+          { recursionLimit: toRecursionLimit(maxIterations), streamMode: "values", signal: options?.signal },
         );
         for await (const chunk of stream) {
           lastState = chunk as typeof PEState.State;
