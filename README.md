@@ -70,9 +70,53 @@ npm run typecheck
 npm test
 ```
 
-> `npm run dev` ainda não faz nada útil: `src/index.ts` está vazio porque a
-> API Express ficou fora do escopo da feature atual. Para ver o agente
-> funcionando, use `npm run arena`.
+```bash
+# Sobe a API HTTP (src/index.ts) — padrão em http://localhost:3000, PORT
+# configurável via .env ou variável de ambiente
+npm run dev
+```
+
+## API HTTP
+
+`POST /chat` — envia um pedido em linguagem natural e recebe a mesma
+execução que a arena produz, por HTTP.
+
+```bash
+curl -X POST http://localhost:3000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "quais alertas estão abertos?"}'
+```
+
+Corpo aceito (validado com zod):
+
+| Campo | Tipo | Obrigatório | Padrão |
+|---|---|---|---|
+| `message` | `string` | sim | — |
+| `strategy` | `"react"` \| `"plan-and-execute"` | não | `"react"` |
+| `reflect` | `boolean` | não | `false` |
+
+`reflect: true` aplica a camada de reflexão sobre a estratégia escolhida —
+equivalente a `reflect:react`/`reflect:plan-and-execute` na arena, mas como
+modificador, não como prefixo de nome.
+
+Resposta de sucesso (200): `{ answer, trace, metrics, stoppedReason }` — o
+mesmo `StrategyResult` que a arena imprime, sem transformação.
+
+| Status | `error.code` | Quando |
+|---|---|---|
+| 400 | `invalid_body` | corpo malformado — `error.details` lista os campos e o motivo |
+| 422 | `unknown_strategy` | `strategy` não é um nome válido — `error.details.validStrategies` lista os aceitos |
+| 504 | `timeout` | a execução passou de 180s |
+| 500 | `internal` | falha inesperada; nunca vaza detalhe interno |
+
+O estado operacional (serviços, alertas, incidentes) é **compartilhado por
+todas as requisições** do mesmo processo — um incidente aberto num pedido é
+visível nos pedidos seguintes — e vive **só na memória**: reiniciar o
+servidor volta ao baseline de `src/store/seed.json`. Não há persistência em
+disco nem em banco.
+
+Detalhes completos (contratos, decisões técnicas, roteiro de validação) em
+[specs/003-chat-http-api/](specs/003-chat-http-api/).
 
 ## Estrutura
 
@@ -82,18 +126,21 @@ src/
 ├── store/     # transições de estado puras + repositório in-memory
 ├── trace/     # tipos e formatação do rastro de raciocínio (puro)
 ├── agents/    # fábrica do modelo, ferramentas, estratégias ReAct e Plan-and-Execute,
-│              # crítico e camada de reflexão (withReflection)
+│              # crítico, camada de reflexão (withReflection) e o registry (index.ts)
+├── http/      # POST /chat: createApp (server.ts), handler e schema (chat.ts),
+│              # corpo de erro consistente (errors.ts)
 ├── scripts/   # comando de seed
 ├── bench/     # cenários e verificação de acerto do benchmark (puro)
 ├── arena.ts   # CLI de comparação de estratégias
-└── bench.ts   # CLI de benchmark: 3 cenários x 2 estratégias, acerto por estado
+├── bench.ts   # CLI de benchmark: 3 cenários x 2 estratégias, acerto por estado
+└── index.ts   # bootstrap: valida PORT e sobe a API HTTP
 ```
 
 A documentação completa das features — spec, plano, decisões técnicas e
 roteiro de validação — está em
-[specs/001-reasoning-core/](specs/001-reasoning-core/) (núcleo de raciocínio)
-e [specs/002-reflection-layer/](specs/002-reflection-layer/) (camada de
-reflexão).
+[specs/001-reasoning-core/](specs/001-reasoning-core/) (núcleo de raciocínio),
+[specs/002-reflection-layer/](specs/002-reflection-layer/) (camada de
+reflexão) e [specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 

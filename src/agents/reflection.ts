@@ -116,6 +116,20 @@ export function withReflection(strategy: ReasoningStrategy, options?: Reflection
           };
         }
 
+        // FR-020, R-006: um pedido HTTP cancelado (timeout ou desistência do
+        // cliente) não deve disparar mais uma tentativa cara — encerra o
+        // ciclo com o que já foi produzido, em vez de iniciar uma
+        // regeneração que só seria descartada.
+        if (runOptions?.signal?.aborted) {
+          llmCalls += critiqueCounter.calls;
+          return {
+            answer: attempt.answer,
+            trace,
+            metrics: { llmCalls, latencyMs: Date.now() - started },
+            stoppedReason,
+          };
+        }
+
         // FR-012: regenera com o feedback no contexto (R-002).
         const isLastReflection = reflection === maxReflections - 1;
         attempt = await strategy.run(enrichInput(input, attempt, verdict), runOptions);

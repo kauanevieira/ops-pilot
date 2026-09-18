@@ -13,7 +13,7 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
 
 ## Comandos
 
-- `npm run dev` — inicia a aplicação (`src/index.ts`)
+- `npm run dev` — sobe a API HTTP (`src/index.ts`, `POST /chat`)
 - `npm run seed` — aplica a linha de base do estado in-memory (5 serviços, 6 alertas)
 - `npm run arena` — compara estratégias de raciocínio sobre o mesmo pedido (`src/arena.ts`)
 - `npm run bench` — executa `src/bench.ts`

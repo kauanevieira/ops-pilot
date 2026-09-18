@@ -7,7 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "tsx src/index.ts",
+    "dev": "tsx --env-file-if-exists=.env src/index.ts",
     "arena": "tsx --env-file-if-exists=.env src/arena.ts",
     "bench": "tsx --env-file-if-exists=.env src/bench.ts",
     "seed": "tsx src/scripts/seed.ts",
