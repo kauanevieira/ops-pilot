@@ -71,7 +71,14 @@ export function createPlanAndExecuteStrategy(store: OpsRepository): ReasoningStr
           { messages: [{ role: "user", content: step }] },
           { recursionLimit: 5, callbacks: [counter] },
         );
-        const stepTrace = messagesToTrace(stepResult.messages);
+        // messagesToTrace labels the last AI message "answer", which is right
+        // for a top-level strategy but wrong here: this is one step's own
+        // wrap-up, not the overall Plan-and-Execute answer (only the
+        // replanner's "encerrar" decision produces that). Relabel it as a
+        // thought so the trace has exactly one "answer" event at the end.
+        const stepTrace = messagesToTrace(stepResult.messages).map((event) =>
+          event.type === "answer" ? ({ type: "thought", content: event.content } satisfies TraceEvent) : event,
+        );
         const lastMessage = stepResult.messages.at(-1);
         const resultText =
           typeof lastMessage?.content === "string"
