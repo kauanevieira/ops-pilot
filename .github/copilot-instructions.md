@@ -14,10 +14,14 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
 ## Comandos
 
 - `npm run dev` — inicia a aplicação (`src/index.ts`)
-- `npm run arena` — executa `src/arena.ts`
+- `npm run seed` — aplica a linha de base do estado in-memory (5 serviços, 6 alertas)
+- `npm run arena` — compara estratégias de raciocínio sobre o mesmo pedido (`src/arena.ts`)
 - `npm run bench` — executa `src/bench.ts`
 - `npm test` — roda os testes (`node --import tsx --test`)
 - `npm run typecheck` — checagem de tipos (`tsc --noEmit`)
+
+Requer **Node 22 LTS** (`engines.node` em `package.json`; ver `.nvmrc`) — versões
+anteriores quebram o `tsc` e a expansão de glob do script `test`.
 
 ## Convenções
 
