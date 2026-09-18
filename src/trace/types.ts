@@ -11,7 +11,13 @@ export interface RunMetrics {
   latencyMs: number;
 }
 
-export type StoppedReason = "completed" | "max-iterations" | "max-steps";
+/**
+ * "max-reflections" (002-reflection-layer, FR-015, R-005): the reflection
+ * cycle exhausted its retries without the critic approving. Additive to the
+ * union — no existing switch over StoppedReason is exhaustive (format.ts
+ * interpolates it), so this cannot break the base strategies.
+ */
+export type StoppedReason = "completed" | "max-iterations" | "max-steps" | "max-reflections";
 
 export interface StrategyResult {
   answer: string;

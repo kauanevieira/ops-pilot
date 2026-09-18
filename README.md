@@ -3,7 +3,9 @@
 OpsPilot é um copiloto de plantão que gerencia alertas e incidentes de
 produção. O núcleo é um agente LangChain/LangGraph rodando sobre o OpenRouter,
 com duas estratégias de raciocínio comparáveis lado a lado: **ReAct** e
-**Plan-and-Execute**.
+**Plan-and-Execute** — e uma camada de **reflexão** (`reflect:react`,
+`reflect:plan-and-execute`) que decora qualquer uma delas com um ciclo de
+crítica e regeneração antes de entregar a resposta.
 
 ## Pré-requisitos
 
@@ -40,7 +42,16 @@ npm run arena -- "quais alertas estão disparando?" --strategies react
 # Compara as duas estratégias na mesma invocação
 npm run arena -- "quais alertas estão disparando?" --strategies react,plan-and-execute
 
-# Limita o número de iterações (padrão: 12)
+# Roda a versão com reflexão: crítica + regeneração até aprovar ou esgotar
+# o limite (padrão: 2 reflexões, ou seja, até 3 execuções da base)
+npm run arena -- "quais alertas estão disparando?" --strategies reflect:react
+
+# Compara crua e refletida lado a lado — sem --strategies só as cruas rodam,
+# porque a reflexão multiplica o custo em chamadas de modelo
+npm run arena -- "<pedido>" --strategies react,reflect:react,plan-and-execute,reflect:plan-and-execute
+
+# Limita o número de iterações (padrão: 12) — vale por tentativa, inclusive
+# dentro do ciclo de reflexão
 npm run arena -- "<pedido>" --strategies react --max-iterations 3
 
 # Portões de qualidade — offline, sem credenciais
@@ -59,14 +70,17 @@ src/
 ├── domain/    # esquemas zod e erros de domínio (puro)
 ├── store/     # transições de estado puras + repositório in-memory
 ├── trace/     # tipos e formatação do rastro de raciocínio (puro)
-├── agents/    # fábrica do modelo, ferramentas, estratégias ReAct e Plan-and-Execute
+├── agents/    # fábrica do modelo, ferramentas, estratégias ReAct e Plan-and-Execute,
+│              # crítico e camada de reflexão (withReflection)
 ├── scripts/   # comando de seed
 └── arena.ts   # CLI de comparação de estratégias
 ```
 
-A documentação completa da feature — spec, plano, decisões técnicas e roteiro
-de validação — está em
-[specs/001-reasoning-core/](specs/001-reasoning-core/).
+A documentação completa das features — spec, plano, decisões técnicas e
+roteiro de validação — está em
+[specs/001-reasoning-core/](specs/001-reasoning-core/) (núcleo de raciocínio)
+e [specs/002-reflection-layer/](specs/002-reflection-layer/) (camada de
+reflexão).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 

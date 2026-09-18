@@ -7,7 +7,7 @@ O avaliador que julga a resposta de uma tentativa contra as evidências do seu r
 ## Interface
 
 ```ts
-type Critic = (context: CritiqueContext) => Promise<Critique>;
+type Critic = (context: CritiqueContext, callbacks: BaseCallbackHandler[]) => Promise<Critique>;
 
 const critiqueSchema = z.object({
   approved: z.boolean(),
@@ -18,13 +18,17 @@ function buildCritiqueContext(input: string, result: StrategyResult): CritiqueCo
 function createLlmCritic(): Critic;                                                     // efeitosa
 ```
 
+**Refinamento feito na implementação** (ver [data-model.md](../data-model.md)): `callbacks` é
+fornecido pelo *chamador* (o decorator), não pelo crítico — é assim que a chamada do crítico entra
+na soma de `llmCalls` sem o crítico precisar expor seu próprio contador.
+
 ## Obrigações do implementador padrão (`createLlmCritic`)
 
 | # | Obrigação | Requisito |
 |---|-----------|-----------|
 | 1 | Usa `createModel()` — a fábrica única, sem configuração de modelo própria | FR-007, R-003 |
 | 2 | Usa `withStructuredOutput(critiqueSchema)`; nada de `JSON.parse` manual | FR-009, R-003 |
-| 3 | Passa uma instância própria de `LlmCallCounter` em `callbacks`, para o decorator somar | FR-022, R-008 |
+| 3 | Encaminha o `callbacks` recebido para `.invoke(...)`, para o chamador somar as chamadas | FR-022, R-008 |
 | 4 | Não recebe ferramentas: julga só com o que está no contexto | assumption |
 | 5 | Lança em falha de rede/timeout/parecer inválido — o `try/catch` é do decorator | FR-017, R-009 |
 

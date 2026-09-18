@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { InMemoryOpsRepository } from "./store/in-memory.ts";
 import { baselineState } from "./store/seed.ts";
-import { availableStrategyNames, createStrategy, DEFAULT_MAX_ITERATIONS } from "./agents/registry.ts";
+import { availableStrategyNames, createStrategy, defaultStrategyNames, DEFAULT_MAX_ITERATIONS } from "./agents/registry.ts";
 import { formatMetrics, formatTrace } from "./trace/format.ts";
 
 const argsSchema = z.object({
@@ -38,7 +38,10 @@ function validateArgs(argv: string[]) {
   const raw = parseArgv(argv);
   return argsSchema.parse({
     input: raw.input ?? "",
-    strategies: raw.strategies ? raw.strategies.split(",").map((s) => s.trim()) : availableStrategyNames(),
+    // T026: sem --strategies, roda só as cruas — reflect:* multiplica o
+    // custo de modelo e não deve ser o padrão implícito de uma invocação
+    // sem flags. Continuam selecionáveis explicitamente (FR-026).
+    strategies: raw.strategies ? raw.strategies.split(",").map((s) => s.trim()) : defaultStrategyNames(),
     maxIterations: raw.maxIterations ? Number(raw.maxIterations) : DEFAULT_MAX_ITERATIONS,
   });
 }

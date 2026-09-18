@@ -45,8 +45,16 @@ Derivada por função pura `buildCritiqueContext(input, result): CritiqueContext
 ### `Critic` — o avaliador
 
 ```ts
-type Critic = (context: CritiqueContext) => Promise<Critique>;
+type Critic = (context: CritiqueContext, callbacks: BaseCallbackHandler[]) => Promise<Critique>;
 ```
+
+**Refinamento feito na implementação**: `callbacks` foi acrescentado à assinatura para resolver
+uma lacuna do desenho original — sem ele, nada permitia ao decorator atribuir as chamadas de
+modelo do crítico às métricas do ciclo (FR-022). O decorator cria um `LlmCallCounter` por `run()`
+e o passa em `callbacks`; `createLlmCritic()` o encaminha ao `.invoke(...)`, do mesmo jeito que
+`react.ts`/`plan-and-execute.ts` já fazem. Um crítico injetado que não faz chamada real de modelo
+(como os dublês de teste) pode simplesmente ignorar o array — contribuindo corretamente 0
+chamadas às métricas.
 
 Um valor de função, não uma classe. O padrão é `createLlmCritic()`; os testes injetam um
 crítico determinístico (R-004).

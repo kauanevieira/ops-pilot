@@ -34,7 +34,7 @@ calls     := answerRun.metrics.llmCalls
 se maxReflections == 0:  devolve answerRun com name decorado    # FR-016
 
 repete no máximo maxReflections vezes:
-    critique := critic(buildCritiqueContext(input, answerRun))   # FR-006..FR-010
+    critique := critic(buildCritiqueContext(input, answerRun), [contadorDoCritico])   # FR-006..FR-010
       ↳ em erro: trace += critique("indisponível: …"); encerra   # FR-017, FR-020
     trace += critique("aprovado:|reprovado: " + feedback)        # FR-018
     se critique.approved: encerra com answerRun                  # FR-011
@@ -80,8 +80,13 @@ se saiu por esgotamento sem aprovação: stoppedReason := "max-reflections"   # 
 | `reflect:plan-and-execute` | `withReflection(createPlanAndExecuteStrategy(store))` |
 
 `availableStrategyNames()` passa a devolver os quatro nomes, o que faz a mensagem de erro
-de nome inválido já existente listar as versões refletidas sem alteração (FR-025). O
-comportamento padrão da arena sem `--strategies` passa a rodar as quatro.
+de nome inválido já existente listar as versões refletidas sem alteração (FR-025).
+
+**Decisão tomada na implementação (T026)**: sem `--strategies`, a arena roda apenas as duas
+estratégias cruas — não as quatro. `defaultStrategyNames()`, separada de
+`availableStrategyNames()`, existe só para isso. Rodar as quatro por padrão triplicaria
+silenciosamente o custo de uma invocação sem flags; as refletidas continuam totalmente
+selecionáveis via `--strategies reflect:react,...` (FR-026).
 
 `ReflectionOptions` **não** é exposto como flag de CLI nesta feature: a arena usa sempre o
 padrão de 2 reflexões.
