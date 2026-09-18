@@ -36,7 +36,25 @@ function toRecursionLimit(maxIterations: number): number {
   return 2 * maxIterations + 1;
 }
 
-export function createPlanAndExecuteStrategy(store: OpsRepository): ReasoningStrategy {
+export interface PlanAndExecuteOptions {
+  /**
+   * bench.ts's `--no-replanner`: skip the replanner's plan-revision LLM
+   * call between steps entirely — execute the initial plan straight
+   * through, and synthesize the answer from the last step's own result
+   * with no extra model call. Trades away mid-run replanning (an empty
+   * plan with nothing executed still yields an empty answer, same as the
+   * "planejador devolve plano vazio" edge case) for fewer llmCalls, which
+   * is exactly what the flag exists to measure.
+   */
+  disableReplanner?: boolean;
+}
+
+export function createPlanAndExecuteStrategy(
+  store: OpsRepository,
+  options: PlanAndExecuteOptions = {},
+): ReasoningStrategy {
+  const disableReplanner = options.disableReplanner ?? false;
+
   return {
     name: "plan-and-execute",
     async run(input: string, options?: RunOptions): Promise<StrategyResult> {
@@ -117,20 +135,46 @@ export function createPlanAndExecuteStrategy(store: OpsRepository): ReasoningStr
         };
       }
 
-      const graph = new StateGraph(PEState)
-        .addNode("planner", planner)
-        .addNode("executor", executor)
-        .addNode("replanner", replanner)
-        .addEdge(START, "planner")
-        .addEdge("planner", "executor")
-        .addEdge("executor", "replanner")
-        .addConditionalEdges("replanner", (state) => {
-          if (state.answer) return END;
-          if (state.done.length >= MAX_STEPS) return END;
-          if (state.plan.length === 0) return END;
-          return "executor";
-        })
-        .compile();
+      // No LLM call: only produces `answer` when the plan actually ran out
+      // (mirrors the replanner's "encerrar" outcome without the call).
+      // Reaching this node with steps still pending means the step ceiling
+      // was hit — leave `answer` empty so the same stoppedReason
+      // classification below (unchanged either way) reads it as
+      // "max-steps", not "completed".
+      function finisher(state: typeof PEState.State) {
+        if (state.plan.length > 0) return {};
+        const lastResult = state.done.at(-1)?.[1] ?? "";
+        return { answer: lastResult, trace: [{ type: "answer", content: lastResult }] satisfies TraceEvent[] };
+      }
+
+      const graph = disableReplanner
+        ? new StateGraph(PEState)
+            .addNode("planner", planner)
+            .addNode("executor", executor)
+            .addNode("finisher", finisher)
+            .addEdge(START, "planner")
+            .addEdge("planner", "executor")
+            .addConditionalEdges("executor", (state) => {
+              if (state.plan.length === 0) return "finisher";
+              if (state.done.length >= MAX_STEPS) return "finisher";
+              return "executor";
+            })
+            .addEdge("finisher", END)
+            .compile()
+        : new StateGraph(PEState)
+            .addNode("planner", planner)
+            .addNode("executor", executor)
+            .addNode("replanner", replanner)
+            .addEdge(START, "planner")
+            .addEdge("planner", "executor")
+            .addEdge("executor", "replanner")
+            .addConditionalEdges("replanner", (state) => {
+              if (state.answer) return END;
+              if (state.done.length >= MAX_STEPS) return END;
+              if (state.plan.length === 0) return END;
+              return "executor";
+            })
+            .compile();
 
       let lastState: typeof PEState.State | undefined;
       try {

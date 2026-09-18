@@ -54,6 +54,17 @@ npm run arena -- "<pedido>" --strategies react,reflect:react,plan-and-execute,re
 # dentro do ciclo de reflexão
 npm run arena -- "<pedido>" --strategies react --max-iterations 3
 
+# Benchmark: 3 cenários x react e plan-and-execute, acerto verificado no
+# estado do store (não no texto da resposta) após cada execução
+npm run bench
+
+# Roda um único cenário (c1 = direto, c2 = estruturado, c3 = dinâmico)
+npm run bench -- --scenario c2
+
+# plan-and-execute sem o replanner: executa o plano inicial até o fim sem
+# revisá-lo a cada passo, sem a chamada extra de modelo por revisão
+npm run bench -- --no-replanner
+
 # Portões de qualidade — offline, sem credenciais
 npm run typecheck
 npm test
@@ -73,7 +84,9 @@ src/
 ├── agents/    # fábrica do modelo, ferramentas, estratégias ReAct e Plan-and-Execute,
 │              # crítico e camada de reflexão (withReflection)
 ├── scripts/   # comando de seed
-└── arena.ts   # CLI de comparação de estratégias
+├── bench/     # cenários e verificação de acerto do benchmark (puro)
+├── arena.ts   # CLI de comparação de estratégias
+└── bench.ts   # CLI de benchmark: 3 cenários x 2 estratégias, acerto por estado
 ```
 
 A documentação completa das features — spec, plano, decisões técnicas e
