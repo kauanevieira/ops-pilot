@@ -29,11 +29,22 @@ OPENROUTER_MODEL=<ex.: openai/gpt-4o-mini>
 `.env` nunca é lido pelo agente de codificação nem commitado — as credenciais
 chegam ao processo via a flag nativa `--env-file-if-exists` do Node.
 
+Opcionalmente, defina onde o banco SQLite deve viver:
+
+```
+OPSPILOT_DB=./data/opspilot.db
+```
+
+Sem essa variável, o padrão já é `./data/opspilot.db`. Os testes usam `:memory:`
+automaticamente e nunca tocam esse arquivo.
+
 ## Comandos
 
 ```bash
-# Popula o estado in-memory a partir de src/store/seed.json
-# (5 serviços, 6 alertas: 3 firing, 3 resolved). Não precisa de credenciais.
+# Popula o banco SQLite (OPSPILOT_DB, padrão ./data/opspilot.db) a partir de
+# src/store/seed.json (5 serviços, 6 alertas: 3 firing, 3 resolved, 3
+# runbooks). Idempotente — não precisa de credenciais, nem apaga incidentes
+# já registrados.
 npm run seed
 
 # Roda uma estratégia sobre um pedido em linguagem natural
@@ -109,38 +120,45 @@ mesmo `StrategyResult` que a arena imprime, sem transformação.
 | 504 | `timeout` | a execução passou de 180s |
 | 500 | `internal` | falha inesperada; nunca vaza detalhe interno |
 
-O estado operacional (serviços, alertas, incidentes) é **compartilhado por
-todas as requisições** do mesmo processo — um incidente aberto num pedido é
-visível nos pedidos seguintes — e vive **só na memória**: reiniciar o
-servidor volta ao baseline de `src/store/seed.json`. Não há persistência em
-disco nem em banco.
+O estado operacional (serviços, alertas, incidentes, runbooks) é **compartilhado
+por todas as requisições** do mesmo processo e **persiste em SQLite**
+(`OPSPILOT_DB`, padrão `./data/opspilot.db`) — um incidente aberto num pedido
+continua lá mesmo depois de reiniciar o servidor. A arena e o benchmark
+continuam usando um estado em memória, semeado do zero a cada execução, para
+que comparações entre estratégias sempre partam do mesmo ponto.
 
 Detalhes completos (contratos, decisões técnicas, roteiro de validação) em
-[specs/003-chat-http-api/](specs/003-chat-http-api/).
+[specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP) e
+[specs/004-sqlite-persistence/](specs/004-sqlite-persistence/) (persistência).
 
 ## Estrutura
 
 ```text
 src/
 ├── domain/    # esquemas zod e erros de domínio (puro)
-├── store/     # transições de estado puras + repositório in-memory
+├── store/     # transições de estado puras + repositórios in-memory e SQLite
+│              # (sqlite-ops-store.ts, sqlite-schema.ts, db.ts)
 ├── trace/     # tipos e formatação do rastro de raciocínio (puro)
-├── agents/    # fábrica do modelo, ferramentas, estratégias ReAct e Plan-and-Execute,
-│              # crítico, camada de reflexão (withReflection) e o registry (index.ts)
+├── agents/    # fábrica do modelo, as 5 ferramentas (list_alerts, list_incidents,
+│              # consultar_runbook, open_incident, resolve_incident), estratégias
+│              # ReAct e Plan-and-Execute, crítico, camada de reflexão
+│              # (withReflection) e o registry (index.ts)
 ├── http/      # POST /chat: createApp (server.ts), handler e schema (chat.ts),
 │              # corpo de erro consistente (errors.ts)
-├── scripts/   # comando de seed
+├── scripts/   # comando de seed (grava no banco SQLite)
 ├── bench/     # cenários e verificação de acerto do benchmark (puro)
-├── arena.ts   # CLI de comparação de estratégias
+├── arena.ts   # CLI de comparação de estratégias (estado em memória)
 ├── bench.ts   # CLI de benchmark: 3 cenários x 2 estratégias, acerto por estado
-└── index.ts   # bootstrap: valida PORT e sobe a API HTTP
+└── index.ts   # bootstrap: abre/semeia o banco SQLite, valida PORT e sobe a API HTTP
 ```
 
 A documentação completa das features — spec, plano, decisões técnicas e
 roteiro de validação — está em
 [specs/001-reasoning-core/](specs/001-reasoning-core/) (núcleo de raciocínio),
 [specs/002-reflection-layer/](specs/002-reflection-layer/) (camada de
-reflexão) e [specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP).
+reflexão), [specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP) e
+[specs/004-sqlite-persistence/](specs/004-sqlite-persistence/) (persistência
+em SQLite).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 

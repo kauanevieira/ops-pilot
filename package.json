@@ -7,11 +7,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "tsx --env-file-if-exists=.env src/index.ts",
-    "arena": "tsx --env-file-if-exists=.env src/arena.ts",
+    "dev": "tsx --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/index.ts",
+    "arena": "tsx --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/arena.ts",
     "bench": "tsx --env-file-if-exists=.env src/bench.ts",
-    "seed": "tsx src/scripts/seed.ts",
-    "test": "node --import tsx --test src/**/*.test.ts",
+    "seed": "tsx --disable-warning=ExperimentalWarning src/scripts/seed.ts",
+    "test": "node --disable-warning=ExperimentalWarning --import tsx --test src/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -19,8 +19,6 @@
     "@langchain/langgraph": "^1.4.15",
     "@langchain/openai": "^1.5.13",
     "express": "^5.2.1",
-    "mysql2": "^3.24.4",
-    "sequelize": "^6.37.8",
     "zod": "^4.6.5"
   },
   "devDependencies": {

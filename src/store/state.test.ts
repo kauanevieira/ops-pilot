@@ -10,9 +10,10 @@ import type { WorldState } from "./types.ts";
 
 function baseState(): WorldState {
   return {
-    services: [{ id: "checkout", name: "Checkout" }],
+    services: [{ id: "checkout", name: "Checkout", tier: "tier-1" }],
     alerts: [],
     incidents: [],
+    runbooks: [],
   };
 }
 

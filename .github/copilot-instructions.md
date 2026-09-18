@@ -9,12 +9,12 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
 - TypeScript ESM com `strict: true`
 - `zod` na fronteira (HTTP/CLI) para validar entrada e saída
 - Testes com `node:test` via `tsx`
-- Express com MySQL como banco (Sequelize + mysql2)
+- Express com SQLite como banco (`node:sqlite`, nativo — sem ORM, sem servidor externo)
 
 ## Comandos
 
 - `npm run dev` — sobe a API HTTP (`src/index.ts`, `POST /chat`)
-- `npm run seed` — aplica a linha de base do estado in-memory (5 serviços, 6 alertas)
+- `npm run seed` — aplica a linha de base no banco SQLite (5 serviços, 6 alertas, 3 runbooks), idempotente
 - `npm run arena` — compara estratégias de raciocínio sobre o mesmo pedido (`src/arena.ts`)
 - `npm run bench` — executa `src/bench.ts`
 - `npm test` — roda os testes (`node --import tsx --test`)

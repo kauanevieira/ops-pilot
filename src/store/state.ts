@@ -32,6 +32,7 @@ export function openIncident(
     status: "open",
     openedAt: command.openedAt,
     resolvedAt: null,
+    summary: null,
   };
 
   return {

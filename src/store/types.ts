@@ -1,9 +1,10 @@
-import type { Alert, Incident, Service } from "../domain/schemas.ts";
+import type { Alert, Incident, Runbook, Service } from "../domain/schemas.ts";
 
 export interface WorldState {
   readonly services: readonly Service[];
   readonly alerts: readonly Alert[];
   readonly incidents: readonly Incident[];
+  readonly runbooks: readonly Runbook[];
 }
 
 export interface OpenIncidentCommand {

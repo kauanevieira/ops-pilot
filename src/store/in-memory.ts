@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AlertStatus, Incident, Service } from "../domain/schemas.ts";
+import type { AlertStatus, Incident, IncidentStatus, Runbook, Service } from "../domain/schemas.ts";
 import { IncidentNotFoundError } from "../domain/errors.ts";
 import { openIncident as pureOpenIncident, resolveIncident as pureResolveIncident } from "./state.ts";
 import type { OpsRepository } from "./repository.ts";
@@ -58,5 +58,14 @@ export class InMemoryOpsRepository implements OpsRepository {
 
   getIncident(id: string): Incident | undefined {
     return this.#state.incidents.find((i) => i.id === id);
+  }
+
+  listIncidents(status?: IncidentStatus): Incident[] {
+    if (!status) return [...this.#state.incidents];
+    return this.#state.incidents.filter((i) => i.status === status);
+  }
+
+  findRunbook(serviceId: string): Runbook | undefined {
+    return this.#state.runbooks.find((r) => r.serviceId === serviceId);
   }
 }

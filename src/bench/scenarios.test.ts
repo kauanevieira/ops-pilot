@@ -19,6 +19,7 @@ function incident(over: Partial<Incident>): Incident {
     status: "open",
     openedAt: new Date("2026-01-01T01:00:00Z"),
     resolvedAt: null,
+    summary: null,
     ...over,
   };
 }
@@ -29,6 +30,23 @@ describe("benchBaselineState", () => {
     assert.ok(state.services.some((s: Service) => s.id === "catalog"));
     // The canonical 5 services from 001-reasoning-core are still there.
     assert.equal(state.services.length, 6);
+  });
+
+  it("devolve o mesmo estado inicial em chamadas repetidas (FR-030, reprodutibilidade do bench)", () => {
+    const first = benchBaselineState();
+    const second = benchBaselineState();
+
+    assert.deepEqual(
+      first.services.map((s) => s.id).sort(),
+      second.services.map((s) => s.id).sort(),
+    );
+    assert.equal(first.alerts.length, second.alerts.length);
+    assert.equal(first.incidents.length, 0);
+    assert.equal(second.incidents.length, 0);
+    assert.deepEqual(
+      first.runbooks.map((r) => r.serviceId).sort(),
+      second.runbooks.map((r) => r.serviceId).sort(),
+    );
   });
 });
 
