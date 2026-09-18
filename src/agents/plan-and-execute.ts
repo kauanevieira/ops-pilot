@@ -7,20 +7,29 @@ import { messagesToTrace } from "../trace/from-messages.ts";
 import type { OpsRepository } from "../store/repository.ts";
 import { DEFAULT_MAX_ITERATIONS, type ReasoningStrategy, type RunOptions } from "./types.ts";
 import type { StrategyResult, TraceEvent } from "../trace/types.ts";
-import { planSchema, replanSchema } from "./plan-schemas.ts";
+import { planSchema, replanSchema, type Plan, type Replan } from "./plan-schemas.ts";
 
 const MAX_STEPS = 8;
 
-const PlanState = Annotation.Root({
+const PLANNER_PROMPT =
+  "Você monta um plano de passos curtos para resolver o pedido de um plantonista de operações, usando as ferramentas disponíveis (list_alerts, open_incident, resolve_incident). Cada passo deve ser uma frase de ação simples e executável. Se o pedido já estiver resolvido ou não exigir nenhuma ação, devolva uma lista vazia de passos.";
+
+const REPLANNER_PROMPT =
+  'Você revisa um plano de operações à luz do que já foi executado (campo "done": pares [passo, resultado]) e do que resta ("plan"). Escolha uma decisão: "encerrar" quando tudo que era necessário já foi feito — nesse caso preencha "answer" com a resposta final para o plantonista; "ajustar" quando o plano restante precisa mudar à luz dos resultados — nesse caso preencha "plan" com a nova lista de passos restantes; "seguir" quando o plano restante continua válido como está.';
+
+/**
+ * Internal graph state (adapted from the team's PEState reference): `plan`
+ * is a list of remaining step descriptions (fixed from the reference's
+ * `Annotation<string>()`, since the planner writes `plan.steps`, an array);
+ * `done` accumulates [step, result] pairs — its length doubles as the step
+ * counter for the 8-step ceiling, so no separate counter field is needed.
+ */
+const PEState = Annotation.Root({
   input: Annotation<string>(),
   plan: Annotation<string[]>({ reducer: (_left, right) => right, default: () => [] }),
-  pastSteps: Annotation<[string, string][]>({
-    reducer: (left, right) => left.concat(right),
-    default: () => [],
-  }),
-  stepCount: Annotation<number>({ reducer: (_left, right) => right, default: () => 0 }),
-  response: Annotation<string | null>({ reducer: (_left, right) => right, default: () => null }),
-  trace: Annotation<TraceEvent[]>({ reducer: (left, right) => left.concat(right), default: () => [] }),
+  done: Annotation<[string, string][]>({ reducer: (a, b) => a.concat(b), default: () => [] }),
+  answer: Annotation<string>(),
+  trace: Annotation<TraceEvent[]>({ reducer: (a, b) => a.concat(b), default: () => [] }),
 });
 
 function toRecursionLimit(maxIterations: number): number {
@@ -36,115 +45,106 @@ export function createPlanAndExecuteStrategy(store: OpsRepository): ReasoningStr
       const counter = new LlmCallCounter();
       const tools = createOpsTools(store);
 
-      const planner = createModel().withStructuredOutput(planSchema);
-      const replanner = createModel().withStructuredOutput(replanSchema);
+      async function planner(state: typeof PEState.State) {
+        const plan = await createModel().withStructuredOutput<Plan>(planSchema).invoke(
+          [
+            ["system", PLANNER_PROMPT],
+            ["user", state.input],
+          ],
+          { callbacks: [counter] },
+        );
+        return {
+          plan: plan.steps,
+          trace: [{ type: "plan", steps: plan.steps, revision: 0 }] satisfies TraceEvent[],
+        };
+      }
 
-      const graph = new StateGraph(PlanState)
-        .addNode("planner", async (state) => {
-          const plan = await planner.invoke(
+      async function executor(state: typeof PEState.State) {
+        const [step, ...rest] = state.plan;
+        if (!step) {
+          return { plan: rest };
+        }
+
+        // Resolves the single step with the ops tools, then pushes it to `done`.
+        const stepAgent = createReactAgent({ llm: createModel(), tools });
+        const stepResult = await stepAgent.invoke(
+          { messages: [{ role: "user", content: step }] },
+          { recursionLimit: 5, callbacks: [counter] },
+        );
+        const stepTrace = messagesToTrace(stepResult.messages);
+        const lastMessage = stepResult.messages.at(-1);
+        const resultText =
+          typeof lastMessage?.content === "string"
+            ? lastMessage.content
+            : JSON.stringify(lastMessage?.content ?? "");
+
+        return {
+          plan: rest,
+          done: [[step, resultText]] as [string, string][],
+          trace: stepTrace,
+        };
+      }
+
+      async function replanner(state: typeof PEState.State) {
+        const replan = await createModel().withStructuredOutput<Replan>(replanSchema).invoke(
+          [
+            ["system", REPLANNER_PROMPT],
             [
-              {
-                role: "system",
-                content:
-                  "Você monta um plano de passos curtos para resolver o pedido de um plantonista de operações, usando as ferramentas disponíveis (list_alerts, open_incident, resolve_incident). Cada passo deve ser uma frase de ação simples.",
-              },
-              { role: "user", content: state.input },
+              "user",
+              JSON.stringify({ input: state.input, done: state.done, plan: state.plan }),
             ],
-            { callbacks: [counter] },
-          );
-          return {
-            plan: plan.steps,
-            trace: [{ type: "plan", steps: plan.steps, revision: 0 }] satisfies TraceEvent[],
-          };
-        })
-        .addNode("executor", async (state) => {
-          const [step, ...rest] = state.plan;
-          if (!step) {
-            return { plan: rest };
-          }
+          ],
+          { callbacks: [counter] },
+        );
 
-          const stepAgent = createReactAgent({ llm: createModel(), tools });
-          const stepResult = await stepAgent.invoke(
-            { messages: [{ role: "user", content: step }] },
-            { recursionLimit: 5, callbacks: [counter] },
-          );
-          const stepTrace = messagesToTrace(stepResult.messages);
-          const lastMessage = stepResult.messages.at(-1);
-          const resultText =
-            typeof lastMessage?.content === "string" ? lastMessage.content : JSON.stringify(lastMessage?.content ?? "");
+        if (replan.decision === "encerrar") {
+          const answer = replan.answer ?? "";
+          return { answer, trace: [{ type: "answer", content: answer }] satisfies TraceEvent[] };
+        }
 
-          return {
-            plan: rest,
-            pastSteps: [[step, resultText]] as [string, string][],
-            stepCount: state.stepCount + 1,
-            trace: stepTrace,
-          };
-        })
-        .addNode("replanner", async (state) => {
-          const replan = await replanner.invoke(
-            [
-              {
-                role: "system",
-                content:
-                  "Você revisa um plano de operações à luz do que já foi executado. Se tudo que era necessário já foi feito, devolva remainingSteps vazio e uma resposta final em response. Caso contrário, devolva os passos que restam em remainingSteps e response nulo.",
-              },
-              {
-                role: "user",
-                content: JSON.stringify({
-                  input: state.input,
-                  pastSteps: state.pastSteps,
-                  remainingPlan: state.plan,
-                }),
-              },
-            ],
-            { callbacks: [counter] },
-          );
+        const nextPlan = replan.decision === "ajustar" ? replan.plan : state.plan;
+        const revision = state.done.length;
+        return {
+          plan: nextPlan,
+          trace: [{ type: "plan", steps: nextPlan, revision }] satisfies TraceEvent[],
+        };
+      }
 
-          const revision = state.stepCount;
-          const events: TraceEvent[] =
-            replan.response != null
-              ? [{ type: "answer", content: replan.response }]
-              : [{ type: "plan", steps: replan.remainingSteps, revision }];
-
-          return {
-            plan: replan.remainingSteps,
-            response: replan.response,
-            trace: events,
-          };
-        })
+      const graph = new StateGraph(PEState)
+        .addNode("planner", planner)
+        .addNode("executor", executor)
+        .addNode("replanner", replanner)
         .addEdge(START, "planner")
         .addEdge("planner", "executor")
         .addEdge("executor", "replanner")
         .addConditionalEdges("replanner", (state) => {
-          if (state.response != null) return END;
-          if (state.stepCount >= MAX_STEPS) return END;
+          if (state.answer) return END;
+          if (state.done.length >= MAX_STEPS) return END;
           if (state.plan.length === 0) return END;
           return "executor";
         })
         .compile();
 
-      let lastState: typeof PlanState.State | undefined;
+      let lastState: typeof PEState.State | undefined;
       try {
         const stream = await graph.stream(
           { input },
           { recursionLimit: toRecursionLimit(maxIterations), streamMode: "values" },
         );
         for await (const chunk of stream) {
-          lastState = chunk as typeof PlanState.State;
+          lastState = chunk as typeof PEState.State;
         }
       } catch (error) {
         if (!(error instanceof GraphRecursionError)) throw error;
       }
 
-      const finalState = lastState;
-      const trace = finalState?.trace ?? [];
-      const stepCount = finalState?.stepCount ?? 0;
-      const response = finalState?.response ?? null;
-
-      const stoppedReason = response != null ? "completed" : stepCount >= MAX_STEPS ? "max-steps" : "max-iterations";
+      const trace = lastState?.trace ?? [];
+      const doneCount = lastState?.done.length ?? 0;
+      const answer = lastState?.answer ?? "";
+      const stoppedReason = answer ? "completed" : doneCount >= MAX_STEPS ? "max-steps" : "max-iterations";
 
       return {
-        answer: response ?? "",
+        answer,
         trace,
         metrics: { llmCalls: counter.calls, latencyMs: Date.now() - started },
         stoppedReason,

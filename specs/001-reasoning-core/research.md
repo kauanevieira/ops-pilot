@@ -90,20 +90,34 @@ exige encerramento controlado com rastro parcial preservado.
 
 **Decision**: `StateGraph` próprio com três nós — `planner` → `executor` → `replanner` —
 e aresta condicional do `replanner` de volta ao `executor` ou para `END`. Estado do grafo
-carrega `input`, `plan: string[]`, `pastSteps: [step, result][]`, `stepCount`, `trace`.
-Planner e replanner usam `withStructuredOutput()` com esquema zod para devolver a lista
-de passos. O teto de 8 passos é verificado na aresta condicional, antes de reentrar no
-`executor`.
+(`PEState`) carrega `input`, `plan: string[]` (passos restantes), `done: [step, result][]`
+(acumulado por reducer — seu comprimento **é** o contador de passos, sem campo
+`stepCount` separado), `answer: string` e `trace`. Planner usa `withStructuredOutput()`
+para devolver a lista de passos. O replanner devolve uma de três decisões —
+`ajustar` (revisa `plan`), `seguir` (mantém `plan` como está) ou `encerrar` (preenche
+`answer`) — em vez de inferir a decisão a partir de `remainingSteps` vazio/não vazio; a
+enumeração explícita deixa a intenção do modelo auditável no rastro. O teto de 8 passos
+é verificado na aresta condicional (`done.length >= 8`), antes de reentrar no `executor`.
 
-**Rationale**: FR-024 a FR-029 descrevem exatamente esse grafo. Saída estruturada via
-zod garante que o plano chegue como lista de passos e não como prosa a ser parseada.
-Verificar o teto na aresta — e não dentro do executor — é o que garante FR-028 mesmo se
-o replanner devolver um plano gigante de uma vez.
+**Nota de tipagem**: `withStructuredOutput<T>(schema)` precisa do parâmetro de tipo
+explícito. Sem ele, a inferência estrutural do `@langchain/core@1.2.11` a partir do
+schema zod produz `campo: T | undefined` para campos com `.default()` — um descompasso
+entre o tipo inferido e o que o zod realmente valida em runtime (confirmado isolando a
+chamada fora do projeto). `withStructuredOutput<Plan>(planSchema)` e
+`withStructuredOutput<Replan>(replanSchema)` contornam o problema.
+
+**Rationale**: FR-024 a FR-029 descrevem esse grafo. Saída estruturada via zod garante
+que o plano chegue como lista de passos e não como prosa a ser parseada. Verificar o
+teto na aresta — e não dentro do executor — é o que garante FR-028 mesmo se o replanner
+devolver um plano gigante de uma vez. Derivar o contador de passos de `done.length` em
+vez de um campo redundante elimina uma fonte de dessincronia entre os dois.
 
 **Alternatives considered**: Executar o plano inteiro em lote sem replanejamento — mais
 barato em chamadas de LLM, mas viola FR-025 (um passo por vez) e FR-026 (revisão após
 cada passo). Teto aplicado só por `recursionLimit` — não distingue "8 passos" de "8
-super-steps" e deixaria FR-028 sem garantia direta.
+super-steps" e deixaria FR-028 sem garantia direta. Replanner com `remainingSteps`
+vazio/não-vazio em vez de uma decisão explícita — funciona, mas obriga inferir a
+intenção (ajustar vs. seguir) a partir de um efeito colateral do array.
 
 ---
 
@@ -144,16 +158,29 @@ funciona, mas piora a ergonomia de quem roda a arena.
 ## R-008: Fonte de verdade do estado
 
 **Decision**: Store in-memory puro atrás de uma interface `AlertRepository` /
-`IncidentRepository`. MySQL + Sequelize ficam **fora** desta feature.
+`IncidentRepository`. MySQL + Sequelize ficam **fora** desta feature. A linha de base
+(antes um literal TypeScript) agora mora em `src/store/seed.json`, lida via
+`readFileSync` e validada contra os esquemas zod do domínio (com `z.coerce.date()` para
+os campos de data, que chegam como string ISO no JSON) em `src/store/seed.ts`. O JSON é
+a "base de dados" desta fase: as ferramentas leem o que já existe nele; itens novos
+(incidentes abertos durante uma execução) vivem apenas no `WorldState` em memória
+construído a partir do arquivo — a execução não regrava o JSON.
 
 **Rationale**: Decisão tomada com o usuário durante `/speckit-specify` (registrada em
-`checklists/requirements.md`). Mantém FR-035 trivialmente satisfeito — testes sem rede,
-sem container de banco, determinísticos — e preserva o caminho para persistência durável
-via FR-017, sem tocar em ferramentas nem estratégias.
+`checklists/requirements.md`) e refinada durante a implementação: mover o literal para
+um arquivo `.json` separa dado de código sem abandonar "in-memory nesta feature" — o
+arquivo é lido uma vez por processo, exatamente como o literal TS era antes. Mantém
+FR-035 trivialmente satisfeito — testes sem rede, sem container de banco,
+determinísticos — e preserva o caminho para persistência durável via FR-017, sem tocar
+em ferramentas nem estratégias.
 
 **Alternatives considered**: Sequelize com SQLite em memória nos testes e MySQL em
 produção — entrega persistência já nesta feature, ao custo de infraestrutura de banco
 para rodar a arena e de I/O assíncrono no núcleo. Adiado para a feature seguinte.
+Regravar `seed.json` a cada incidente aberto, para persistência entre execuções —
+rejeitado por ora: introduziria I/O de escrita e problemas de concorrência que a decisão
+"in-memory nesta feature" existe justamente para evitar; revisitar quando a persistência
+durável entrar.
 
 ---
 

@@ -1,69 +1,35 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { z } from "zod";
+import { alertSchema, incidentSchema, serviceSchema } from "../domain/schemas.ts";
 import type { WorldState } from "./types.ts";
 
+const SEED_FILE_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "seed.json");
+
 /**
- * Deterministic baseline state (FR-020, FR-021): 5 services and exactly 6
- * alerts (3 firing, 3 resolved) with varied severities, no incidents.
- * Fixed ids and timestamps so reapplying produces an identical state.
+ * Same entities as domain/schemas.ts, but with date fields coerced from the
+ * ISO strings that JSON carries instead of the Date instances the domain
+ * schemas expect at runtime.
+ */
+const seedFileSchema = z.object({
+  services: z.array(serviceSchema),
+  alerts: z.array(alertSchema.extend({ firedAt: z.coerce.date() })),
+  incidents: z.array(
+    incidentSchema.extend({ openedAt: z.coerce.date(), resolvedAt: z.coerce.date().nullable() }),
+  ),
+});
+
+/**
+ * Loads the baseline (or current) state from seed.json (FR-020, FR-021).
+ * This is the "database" for now (R-008): a JSON file the model's tools
+ * read from, with new items (e.g. incidents opened during a run) living
+ * only in the in-memory WorldState built from it, not written back to disk.
+ * Reapplying this loader against an untouched seed.json always yields the
+ * same state, since the file itself doesn't change.
  */
 export function baselineState(): WorldState {
-  return {
-    services: [
-      { id: "checkout", name: "Checkout" },
-      { id: "payments", name: "Payments" },
-      { id: "auth", name: "Auth" },
-      { id: "search", name: "Search" },
-      { id: "notifications", name: "Notifications" },
-    ],
-    alerts: [
-      {
-        id: "alert-1",
-        serviceId: "checkout",
-        summary: "Checkout error rate above threshold",
-        severity: "critical",
-        status: "firing",
-        firedAt: new Date("2026-01-01T00:00:00.000Z"),
-      },
-      {
-        id: "alert-2",
-        serviceId: "payments",
-        summary: "Payment gateway latency spike",
-        severity: "high",
-        status: "firing",
-        firedAt: new Date("2026-01-01T00:05:00.000Z"),
-      },
-      {
-        id: "alert-3",
-        serviceId: "auth",
-        summary: "Elevated login failures",
-        severity: "medium",
-        status: "firing",
-        firedAt: new Date("2026-01-01T00:10:00.000Z"),
-      },
-      {
-        id: "alert-4",
-        serviceId: "search",
-        summary: "Search index lag",
-        severity: "low",
-        status: "resolved",
-        firedAt: new Date("2026-01-01T00:15:00.000Z"),
-      },
-      {
-        id: "alert-5",
-        serviceId: "notifications",
-        summary: "Push notification delivery delay",
-        severity: "medium",
-        status: "resolved",
-        firedAt: new Date("2026-01-01T00:20:00.000Z"),
-      },
-      {
-        id: "alert-6",
-        serviceId: "checkout",
-        summary: "Checkout cart abandonment spike",
-        severity: "high",
-        status: "resolved",
-        firedAt: new Date("2026-01-01T00:25:00.000Z"),
-      },
-    ],
-    incidents: [],
-  };
+  const raw = readFileSync(SEED_FILE_PATH, "utf-8");
+  const parsed = seedFileSchema.parse(JSON.parse(raw));
+  return parsed;
 }
