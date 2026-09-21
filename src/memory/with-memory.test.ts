@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { formatMemoriesInput, withMemory } from "./with-memory.ts";
+import { formatMemoriesBlock, formatMemoriesInput, withMemory } from "./with-memory.ts";
 import { withReflection } from "../agents/reflection.ts";
 import { withConversationHistory } from "../agents/conversation-history.ts";
 import type { Critic } from "../agents/critic.ts";
@@ -54,6 +54,25 @@ describe("formatMemoriesInput", () => {
     assert.match(composed, /\[mem-2\] Prefiro respostas curtas/);
     assert.match(composed, /quais serviços são meus\?$/);
     assert.ok(composed.indexOf("mem-1") < composed.indexOf("mem-2"));
+  });
+});
+
+describe("formatMemoriesBlock (010-context-measurement, B4/B5)", () => {
+  it("is empty with no memories", () => {
+    assert.equal(formatMemoriesBlock([]), "");
+  });
+
+  it("contains each fact's bracketed memoryId", () => {
+    const m = memories(["mem-1", "Sou responsável pelo checkout", 0.8], ["mem-2", "Prefiro respostas curtas", 0.5]);
+    const block = formatMemoriesBlock(m);
+    assert.match(block, /\[mem-1\]/);
+    assert.match(block, /\[mem-2\]/);
+  });
+
+  it("concatenated with any input reproduces formatMemoriesInput exactly (B4)", () => {
+    const m = memories(["mem-1", "Sou responsável pelo checkout", 0.8]);
+    const input = "quais serviços são meus?";
+    assert.equal(formatMemoriesBlock(m) + input, formatMemoriesInput(m, input));
   });
 });
 

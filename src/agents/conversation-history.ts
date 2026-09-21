@@ -17,6 +17,24 @@ const ROLE_LABEL: Record<ConversationMessage["role"], string> = {
 };
 
 /**
+ * 010-context-measurement: the exact text `formatHistoryInput` prefixes
+ * onto `input` — extracted so `src/context/breakdown.ts` can estimate
+ * precisely what this decorator adds, instead of reconstructing it
+ * separately and risking silent drift (research R-007). `""` with no
+ * history, same as `formatHistoryInput`'s early return.
+ */
+export function formatHistoryBlock(history: ConversationMessage[]): string {
+  if (history.length === 0) return "";
+
+  const transcript = history.map((message) => `${ROLE_LABEL[message.role]} ${message.content}`).join("\n");
+
+  return (
+    ["Histórico recente desta conversa (da mais antiga para a mais recente):", transcript, "", "Mensagem atual do plantonista:"].join("\n") +
+    "\n"
+  );
+}
+
+/**
  * Pure text composition (R-007): the only thing every `ReasoningStrategy`
  * shares is `run(input: string)`, so history is prefixed as text rather
  * than delivered as structured messages — that would require every
@@ -26,17 +44,7 @@ const ROLE_LABEL: Record<ConversationMessage["role"], string> = {
  * unaffected (FR-023, SC-007).
  */
 export function formatHistoryInput(history: ConversationMessage[], input: string): string {
-  if (history.length === 0) return input;
-
-  const transcript = history.map((message) => `${ROLE_LABEL[message.role]} ${message.content}`).join("\n");
-
-  return [
-    "Histórico recente desta conversa (da mais antiga para a mais recente):",
-    transcript,
-    "",
-    "Mensagem atual do plantonista:",
-    input,
-  ].join("\n");
+  return formatHistoryBlock(history) + input;
 }
 
 /**

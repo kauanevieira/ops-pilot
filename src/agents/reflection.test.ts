@@ -1,16 +1,33 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { AIMessage } from "@langchain/core/messages";
+import type { LLMResult } from "@langchain/core/outputs";
 import { withReflection, DEFAULT_MAX_REFLECTIONS } from "./reflection.ts";
 import type { Critic, CritiqueContext } from "./critic.ts";
 import type { ReasoningStrategy, RunOptions } from "./types.ts";
 import type { StrategyResult, TraceEvent } from "../trace/types.ts";
 
-function makeResult(answer: string, trace: TraceEvent[] = [], llmCalls = 1): StrategyResult {
+/**
+ * `promptTokens` is `undefined` by default (010-context-measurement, R2):
+ * a fake attempt that never mentions token usage must leave the decorated
+ * result's `promptTokens` key absent, the same way a real attempt with an
+ * unreported call would.
+ */
+function makeResult(answer: string, trace: TraceEvent[] = [], llmCalls = 1, promptTokens?: number): StrategyResult {
   return {
     answer,
     trace: [...trace, { type: "answer", content: answer }],
-    metrics: { llmCalls, latencyMs: 5 },
+    metrics: { llmCalls, latencyMs: 5, ...(promptTokens !== undefined && { promptTokens }) },
     stoppedReason: "completed",
+  };
+}
+
+/** An `LLMResult` whose `AIMessage` reports the given input token count. */
+function usageResult(inputTokens: number): LLMResult {
+  return {
+    generations: [
+      [{ text: "", message: new AIMessage({ content: "", usage_metadata: { input_tokens: inputTokens, output_tokens: 0, total_tokens: inputTokens } }) } as never],
+    ],
   };
 }
 
@@ -54,20 +71,40 @@ function throwingCritic(): Critic {
   };
 }
 
+/** A critic that starts a chat-model call (counted) and then fails before it ends without usage (R3). */
+function throwingCriticAfterStart(): Critic {
+  return async (_context, callbacks) => {
+    for (const handler of callbacks) {
+      (handler as { handleChatModelStart?: () => void }).handleChatModelStart?.();
+    }
+    throw new Error("crítico indisponível depois de iniciar a chamada");
+  };
+}
+
 /**
  * A critic fake that also reports a call count, to test metrics summing.
  * `state` is returned by reference (not destructured), so callers read the
  * live count after `run()` resolves, instead of a snapshot taken early.
+ *
+ * `promptTokens`, when given, makes the fake also fire `handleLLMEnd` with
+ * that usage after `handleChatModelStart` (010-context-measurement, R1) —
+ * simulating a real critic call that reported (or, if omitted, never
+ * reported) its input tokens, one entry per verdict.
  */
-function countingCritic(verdicts: { approved: boolean; feedback: string }[]): { critic: Critic; state: { calls: number } } {
+function countingCritic(
+  verdicts: { approved: boolean; feedback: string; promptTokens?: number }[],
+): { critic: Critic; state: { calls: number } } {
   const state = { calls: 0 };
   const critic: Critic = async (_context: CritiqueContext, callbacks) => {
     state.calls += 1;
+    const verdict = verdicts[Math.min(state.calls - 1, verdicts.length - 1)]!;
     // Simulate a real critic firing its callbacks, the way createLlmCritic does.
     for (const handler of callbacks) {
-      (handler as { handleChatModelStart?: () => void }).handleChatModelStart?.();
+      const h = handler as { handleChatModelStart?: () => void; handleLLMEnd?: (result: LLMResult) => void };
+      h.handleChatModelStart?.();
+      if (verdict.promptTokens !== undefined) h.handleLLMEnd?.(usageResult(verdict.promptTokens));
     }
-    return verdicts[Math.min(state.calls - 1, verdicts.length - 1)]!;
+    return verdict;
   };
   return { critic, state };
 }
@@ -255,6 +292,60 @@ describe("withReflection", () => {
 
       assert.equal(typeof result.metrics.latencyMs, "number");
       assert.ok(result.metrics.latencyMs >= 0);
+    });
+  });
+
+  describe("promptTokens (010-context-measurement)", () => {
+    it("sums the attempt's and the critic's promptTokens on approval (R1)", async () => {
+      const base = fakeStrategy("base", [makeResult("r1", [], 1, 100)]);
+      const { critic } = countingCritic([{ approved: true, feedback: "", promptTokens: 40 }]);
+      const decorated = withReflection(base, { critic });
+
+      const result = await decorated.run("pedido");
+
+      assert.equal(result.metrics.promptTokens, 140);
+    });
+
+    it("sums every attempt and every critic call across a regeneration (R1)", async () => {
+      const base = fakeStrategy("base", [makeResult("r1", [], 1, 100), makeResult("r2", [], 1, 150)]);
+      const { critic } = countingCritic([
+        { approved: false, feedback: "falta evidência", promptTokens: 40 },
+        { approved: true, feedback: "", promptTokens: 40 },
+      ]);
+      const decorated = withReflection(base, { critic });
+
+      const result = await decorated.run("pedido");
+
+      assert.equal(result.metrics.promptTokens, 100 + 150 + 40 + 40);
+    });
+
+    it("leaves promptTokens absent when an attempt didn't report it (R2)", async () => {
+      const base = fakeStrategy("base", [makeResult("r1")]); // no promptTokens
+      const { critic } = countingCritic([{ approved: true, feedback: "", promptTokens: 40 }]);
+      const decorated = withReflection(base, { critic });
+
+      const result = await decorated.run("pedido");
+
+      assert.equal("promptTokens" in result.metrics, false);
+    });
+
+    it("leaves promptTokens absent when the critic started a call and then failed (R3)", async () => {
+      const base = fakeStrategy("base", [makeResult("r1", [], 1, 100)]);
+      const decorated = withReflection(base, { critic: throwingCriticAfterStart() });
+
+      const result = await decorated.run("pedido");
+
+      assert.equal("promptTokens" in result.metrics, false);
+    });
+
+    it("maxReflections: 0 returns the attempt's own promptTokens untouched", async () => {
+      const base = fakeStrategy("base", [makeResult("r1", [], 1, 100)]);
+      const { critic } = countingCritic([{ approved: false, feedback: "x" }]);
+      const decorated = withReflection(base, { maxReflections: 0, critic });
+
+      const result = await decorated.run("pedido");
+
+      assert.equal(result.metrics.promptTokens, 100);
     });
   });
 });

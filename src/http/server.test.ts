@@ -1208,3 +1208,164 @@ describe("POST /chat — ferramentas de memória (009, US3)", () => {
     assert.ok(!recalled.some((m) => m.memoryId === memoryId));
   });
 });
+
+// --- 010-context-measurement: User Story 1 (promptTokens real) --------
+
+describe("POST /chat — medição de contexto (010, US1 — promptTokens)", () => {
+  it("expõe metrics.promptTokens quando a estratégia o reporta (M1)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult({ metrics: { llmCalls: 3, latencyMs: 5, promptTokens: 4200 } }));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.promptTokens, 4200);
+    });
+  });
+
+  it("omite a chave promptTokens quando a estratégia não a reporta, em vez de uma soma parcial (M2)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult()); // sem promptTokens
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      const body = await jsonOf(res);
+      assert.equal("promptTokens" in body.metrics, false);
+    });
+  });
+
+  it("com userId, promptTokens vem só da estratégia — a chamada do refletor (009) não entra (M3)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult({ metrics: { llmCalls: 1, latencyMs: 5, promptTokens: 999 } }));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const memoryStore = fakeMemoryStore();
+    let distillerCalls = 0;
+    const distiller: Distiller = async () => {
+      distillerCalls += 1;
+      return { hasLearning: false, fact: "" };
+    };
+    const { onLearning, next } = learningProbe();
+
+    await withServer({ resolveStrategy, memoryStore, distiller, onLearning }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi", userId: "ana" });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.promptTokens, 999);
+      await next; // aguarda o refletor terminar antes de checar a contagem
+    });
+
+    assert.equal(distillerCalls, 1);
+  });
+
+  it("corpos de erro (400/404/422/504) não têm chave metrics (M8)", async () => {
+    const strategy = fakeStrategy("react", () => new Promise<StrategyResult>(() => {}));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy, timeoutMs: 30 }, async (baseUrl) => {
+      const res400 = await postChat(baseUrl, {});
+      assert.equal("metrics" in (await jsonOf(res400)), false);
+
+      const res504 = await postChat(baseUrl, { message: "oi" });
+      assert.equal(res504.status, 504);
+      assert.equal("metrics" in (await jsonOf(res504)), false);
+    });
+
+    const unknownResolveStrategy: ResolveStrategy = (selection) => {
+      throw new UnknownStrategyError(selection.name ?? "react", ["react"]);
+    };
+    await withServer({ resolveStrategy: unknownResolveStrategy }, async (baseUrl) => {
+      const res422 = await postChat(baseUrl, { message: "oi", strategy: "nope" });
+      assert.equal("metrics" in (await jsonOf(res422)), false);
+    });
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res404 = await postChat(baseUrl, { message: "oi", conversationId: "não-existe" });
+      assert.equal("metrics" in (await jsonOf(res404)), false);
+    });
+  });
+});
+
+// --- 010-context-measurement: User Story 2 (contextBreakdown) ---------
+
+describe("POST /chat — medição de contexto (010, US2 — contextBreakdown)", () => {
+  it("sem histórico nem userId, history e memories são 0 e message estima o texto da mensagem (cenário 2)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "quais alertas estão abertos?" });
+      const body = await jsonOf(res);
+      assert.deepEqual(Object.keys(body.metrics.contextBreakdown).sort(), ["history", "memories", "message", "total"]);
+      assert.equal(body.metrics.contextBreakdown.history, 0);
+      assert.equal(body.metrics.contextBreakdown.memories, 0);
+      assert.equal(body.metrics.contextBreakdown.message, Math.ceil("quais alertas estão abertos?".length / 4));
+      assert.equal(body.metrics.contextBreakdown.total, body.metrics.contextBreakdown.message);
+    });
+  });
+
+  it("mensagem com espaços nas pontas estima o texto depois do trim (M6)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "  oi  " });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.contextBreakdown.message, Math.ceil("oi".length / 4));
+    });
+  });
+
+  it("num segundo turno, history estima o bloco de histórico efetivamente entregue (cenário 3, M6)", async () => {
+    const inputs: string[] = [];
+    const strategy = fakeStrategy("react", async (input) => {
+      inputs.push(input);
+      return fixedResult({ answer: `resposta ${inputs.length}` });
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+    const secondMessage = "e o runbook dele?";
+
+    await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
+      const res1 = await postChat(baseUrl, { message: "quais alertas estão abertos?" });
+      const conversationId = (await jsonOf(res1)).conversationId;
+
+      const res2 = await postChat(baseUrl, { message: secondMessage, conversationId });
+      const body2 = await jsonOf(res2);
+
+      // O bloco de histórico é exatamente o que sobra da entrada entregue
+      // depois de remover a mensagem (o bloco de memórias está vazio aqui):
+      // o comprimento do bloco bate com o que gerou a estimativa (M6).
+      const delivered = inputs[1]!;
+      assert.ok(delivered.endsWith(secondMessage));
+      const historyBlock = delivered.slice(0, delivered.length - secondMessage.length);
+      assert.equal(body2.metrics.contextBreakdown.history, Math.ceil(historyBlock.length / 4));
+      assert.ok(body2.metrics.contextBreakdown.history > 0);
+      assert.equal(body2.metrics.contextBreakdown.memories, 0);
+    });
+  });
+
+  it("com userId e memória recuperada, memories estima o bloco de fatos entregue (cenário 4)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const memoryStore = fakeMemoryStore({
+      "sou responsável pelo checkout": queryVector(),
+      "quais serviços são meus?": queryVector(),
+    });
+    await memoryStore.remember("ana", "sou responsável pelo checkout");
+
+    await withServer({ resolveStrategy, memoryStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "quais serviços são meus?", userId: "ana" });
+      const body = await jsonOf(res);
+      assert.ok(body.metrics.contextBreakdown.memories > 0);
+      assert.equal(body.metrics.contextBreakdown.history, 0);
+    });
+  });
+
+  it("todo 200 traz as quatro chaves, mesmo com reflect: true (M5)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const resolveStrategy: ResolveStrategy = () => strategy;
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi", reflect: false });
+      const body = await jsonOf(res);
+      assert.deepEqual(Object.keys(body.metrics.contextBreakdown).sort(), ["history", "memories", "message", "total"]);
+    });
+  });
+});

@@ -4,6 +4,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { createModel } from "./model.ts";
 import { createOpsTools } from "./tools.ts";
 import { LlmCallCounter } from "./llm-counter.ts";
+import { promptTokensField } from "../context/tokens.ts";
 import { messagesToTrace } from "../trace/from-messages.ts";
 import type { OpsRepository } from "../store/repository.ts";
 import { DEFAULT_MAX_ITERATIONS, type ReasoningStrategy, type RunOptions } from "./types.ts";
@@ -62,7 +63,7 @@ export function createReactStrategy(store: OpsRepository): ReasoningStrategy {
         return {
           answer: lastAnswer(trace),
           trace,
-          metrics: { llmCalls: counter.calls, latencyMs: Date.now() - started },
+          metrics: { llmCalls: counter.calls, latencyMs: Date.now() - started, ...promptTokensField(counter.promptTokens) },
           stoppedReason: "completed",
         };
       } catch (error) {
@@ -71,7 +72,7 @@ export function createReactStrategy(store: OpsRepository): ReasoningStrategy {
           return {
             answer: "",
             trace,
-            metrics: { llmCalls: counter.calls, latencyMs: Date.now() - started },
+            metrics: { llmCalls: counter.calls, latencyMs: Date.now() - started, ...promptTokensField(counter.promptTokens) },
             stoppedReason: "max-iterations",
           };
         }
