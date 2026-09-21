@@ -222,19 +222,19 @@ parado, erro no turno 1 e saída diferente de zero (quickstart passos 3 e 4).
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T025 [P] Em `src/agents/model.ts`: comentário junto ao `new ChatOpenAI` dizendo que
+- [x] T025 [P] Em `src/agents/model.ts`: comentário junto ao `new ChatOpenAI` dizendo que
       `streaming: true` MUST NOT ser ligado, porque nesse modo o `usage_metadata` passa a ser
       uma estimativa tiktoken e `promptTokens` deixaria de ser real (R-002)
-- [ ] T026 [P] No `README.md`, na seção do `POST /chat` (onde já estão `historyMessages` e
+- [x] T026 [P] No `README.md`, na seção do `POST /chat` (onde já estão `historyMessages` e
       `recalledMemories`): documentar `promptTokens` (real, pode faltar) e `contextBreakdown`
       (estimado; por que o total fica abaixo de `promptTokens`). Acrescentar um exemplo com
       `jq '.metrics | {promptTokens, contextBreakdown}'` e uma subseção curta para
       `./scripts/conversa-longa.sh`. Na árvore de diretórios, incluir `src/context/` e
       `scripts/`
-- [ ] T027 [P] Em `specs/003-chat-http-api/contracts/chat-endpoint.md`: acrescentar ao bloco
+- [x] T027 [P] Em `specs/003-chat-http-api/contracts/chat-endpoint.md`: acrescentar ao bloco
       de emendas no topo o aviso da 010, com o texto de `contracts/chat-endpoint.md` ("Aviso
       na 003")
-- [ ] T028 Portões: `npm run typecheck` e `npm test` sem credenciais. Depois, a verificação
+- [x] T028 Portões: `npm run typecheck` e `npm test` sem credenciais. Depois, a verificação
       manual do `quickstart.md` (passos 1–5) com `OPENROUTER_API_KEY` de quem roda. Registrar
       os números observados no passo 3 como referência
 

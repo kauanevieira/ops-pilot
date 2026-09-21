@@ -189,6 +189,34 @@ campo `historyMessages` (`0..12` — mensagens de histórico entregues ao
 agente naquele pedido). Com `userId`, `metrics` também traz
 `recalledMemories` (`0..3`); sem `userId`, o campo não aparece.
 
+`metrics` também traz dois campos sobre o contexto enviado ao modelo, um real
+e um estimado — nunca reconciliados entre si:
+
+- **`promptTokens`** — real, reportado pelo provedor: soma dos tokens de
+  entrada de toda chamada ao modelo feita naquele pedido (a estratégia base,
+  cada tentativa de reflexão, o crítico). Ausente se alguma dessas chamadas
+  não reportou consumo — nunca uma soma parcial apresentada como total.
+- **`contextBreakdown`** — estimado (caracteres ÷ 4), sempre presente: quanto
+  do contexto veio da mensagem, do histórico e das memórias recuperadas, e o
+  total dessas três estimativas. Fica, de propósito, bem menor que
+  `promptTokens`: não cobre as instruções da estratégia, os esquemas das
+  ferramentas nem o rastro que cresce a cada iteração do agente — só o que o
+  handler do `/chat` de fato compõe.
+
+```bash
+curl -s -X POST http://localhost:3000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "quais alertas críticos estão abertos?"}' \
+  | jq '.metrics | {promptTokens, contextBreakdown}'
+```
+
+Para ver os dois números crescerem ao longo de uma conversa, até a janela de
+histórico estabilizar: `./scripts/conversa-longa.sh` (com o servidor no ar,
+`npm run dev`) conduz 16 turnos numa única conversa e imprime, por turno,
+`promptTokens` e `contextBreakdown` — `n/d` na coluna de `promptTokens`
+quando o provedor não reportou. Endereço configurável por `OPSPILOT_URL`
+(padrão `http://localhost:3000`); precisa de `curl` e `jq`.
+
 | Status | `error.code` | Quando |
 |---|---|---|
 | 400 | `invalid_body` | corpo malformado — `error.details` lista os campos e o motivo |
@@ -291,6 +319,10 @@ src/
 │              # (sqlite-ops-store.ts, sqlite-schema.ts, db.ts) e o
 │              # ConversationStore de conversas (in-memory e SQLite)
 ├── trace/     # tipos e formatação do rastro de raciocínio (puro)
+├── context/   # medição de contexto (puro): estimateTokens (caracteres÷4),
+│              # inputTokensFromResult/sumPromptTokens (tokens reais do
+│              # usage_metadata do provedor), buildContextBreakdown
+│              # (estimativa por fonte: mensagem, histórico, memórias)
 ├── agents/    # tool-definitions.ts: fonte única das 6 ferramentas (list_alerts,
 │              # list_incidents, consultar_runbook, open_incident, resolve_incident,
 │              # check_provider_status) — nome, descrição, esquema e execução;
@@ -319,6 +351,10 @@ src/
 └── index.ts   # bootstrap: abre/semeia o banco SQLite, valida PORT e sobe a API HTTP
 ```
 
+Na raiz do repositório, `scripts/conversa-longa.sh` (bash + `curl` + `jq`) é um
+roteiro de demonstração, separado de `src/scripts/` — precisa do servidor no
+ar e não faz parte de `npm test`.
+
 A documentação completa das features — spec, plano, decisões técnicas e
 roteiro de validação — está em
 [specs/001-reasoning-core/](specs/001-reasoning-core/) (núcleo de raciocínio),
@@ -330,8 +366,9 @@ em SQLite), [specs/005-provider-status-tool/](specs/005-provider-status-tool/)
 [specs/006-mcp-server/](specs/006-mcp-server/) (servidor MCP),
 [specs/007-persistent-conversation/](specs/007-persistent-conversation/) (conversa
 persistente), [specs/008-semantic-memory/](specs/008-semantic-memory/) (memória
-semântica) e [specs/009-learning-reflector/](specs/009-learning-reflector/) (refletor
-de aprendizado).
+semântica), [specs/009-learning-reflector/](specs/009-learning-reflector/) (refletor
+de aprendizado) e [specs/010-context-measurement/](specs/010-context-measurement/)
+(medição de contexto).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 

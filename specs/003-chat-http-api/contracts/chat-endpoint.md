@@ -19,6 +19,12 @@
 > duráveis da mensagem são aprendidos automaticamente depois da resposta. Corpo e
 > resposta não mudam. Ver
 > [`specs/009-learning-reflector/contracts/chat-endpoint.md`](../../009-learning-reflector/contracts/chat-endpoint.md).
+>
+> **Emendado também por `010-context-measurement`**: no 200, `metrics` ganha
+> `promptTokens` (tokens de entrada reais, somados em todas as chamadas do pedido;
+> ausente se o provedor não reportar) e `contextBreakdown` (estimativa por fonte:
+> mensagem, histórico, memórias, total). Ver
+> [`specs/010-context-measurement/contracts/chat-endpoint.md`](../../010-context-measurement/contracts/chat-endpoint.md).
 
 O único endpoint da feature. Recebe um pedido em linguagem natural, executa uma estratégia
 de raciocínio e devolve o resultado da execução.

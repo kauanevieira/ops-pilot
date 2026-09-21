@@ -20,5 +20,11 @@ export function createModel() {
     // timeout a stuck call blocks the strategy forever; failing fast here
     // surfaces the problem instead of hanging the arena indefinitely.
     timeout: 60_000,
+    // 010-context-measurement, R-002: `streaming: true` MUST NOT be set
+    // here. In that mode ChatOpenAI computes `usage_metadata.input_tokens`
+    // itself, from a local tiktoken estimate over the prompt — a number
+    // that would look exactly like the provider's real reported count to
+    // `inputTokensFromResult`, but isn't one. `metrics.promptTokens` is
+    // documented as real precisely because this factory never streams.
   });
 }
