@@ -147,6 +147,50 @@ Detalhes completos (contratos, decisões técnicas, roteiro de validação) em
 [specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP) e
 [specs/004-sqlite-persistence/](specs/004-sqlite-persistence/) (persistência).
 
+## Servidor MCP
+
+O OpsPilot também fala [MCP](https://modelcontextprotocol.io) por stdio, como
+servidor `opspilot`, expondo `list_alerts`, `list_incidents`, `open_incident`
+e `resolve_incident` a qualquer cliente compatível (Claude Code, Claude
+Desktop, etc.) — as mesmas ferramentas, com a mesma descrição e o mesmo
+esquema que o agente interno usa, e sobre o mesmo banco SQLite da API HTTP
+(`OPSPILOT_DB`). `consultar_runbook` e `check_provider_status` não são
+expostas por esse canal.
+
+```bash
+npm run mcp
+```
+
+> ⚠️ **Ao registrar num cliente, use sempre `npm run --silent mcp`** (ou
+> `npm --prefix <caminho-do-repo> run --silent mcp` se o cliente roda de
+> outro diretório). Sem `--silent`, o próprio `npm run` escreve o cabeçalho
+> do script no stdout antes do servidor subir — e no transporte stdio o
+> stdout **é** o canal do protocolo, então esse texto corrompe a sessão,
+> mesmo sem nenhum `console.log` no código do servidor.
+
+Registro num cliente MCP (ex.: `claude mcp add`):
+
+```bash
+claude mcp add opspilot -- npm --prefix "$PWD" run --silent mcp
+```
+
+Ou direto no arquivo de configuração do cliente:
+
+```json
+{
+  "mcpServers": {
+    "opspilot": {
+      "command": "npm",
+      "args": ["--prefix", "/caminho/para/ops-pilot", "run", "--silent", "mcp"]
+    }
+  }
+}
+```
+
+Nenhuma credencial é necessária — o servidor MCP não chama modelo nenhum.
+Detalhes completos (contrato observável, decisões técnicas, roteiro de
+validação) em [specs/006-mcp-server/](specs/006-mcp-server/).
+
 ## Estrutura
 
 ```text
@@ -155,10 +199,15 @@ src/
 ├── store/     # transições de estado puras + repositórios in-memory e SQLite
 │              # (sqlite-ops-store.ts, sqlite-schema.ts, db.ts)
 ├── trace/     # tipos e formatação do rastro de raciocínio (puro)
-├── agents/    # fábrica do modelo, as 6 ferramentas (list_alerts, list_incidents,
-│              # consultar_runbook, open_incident, resolve_incident,
-│              # check_provider_status), estratégias ReAct e Plan-and-Execute,
-│              # crítico, camada de reflexão (withReflection) e o registry (index.ts)
+├── agents/    # tool-definitions.ts: fonte única das 6 ferramentas (list_alerts,
+│              # list_incidents, consultar_runbook, open_incident, resolve_incident,
+│              # check_provider_status) — nome, descrição, esquema e execução;
+│              # tools.ts adapta para LangChain; fábrica do modelo, estratégias
+│              # ReAct e Plan-and-Execute, crítico, reflexão (withReflection) e
+│              # o registry (index.ts)
+├── mcp/       # servidor MCP opspilot por stdio: ops-mcp-server.ts (composição
+│              # pura sobre tool-definitions.ts) e server.ts (entrada: env, banco,
+│              # transporte, stderr)
 ├── http/      # POST /chat: createApp (server.ts), handler e schema (chat.ts),
 │              # corpo de erro consistente (errors.ts)
 ├── scripts/   # comando de seed (grava no banco SQLite)
@@ -172,9 +221,11 @@ A documentação completa das features — spec, plano, decisões técnicas e
 roteiro de validação — está em
 [specs/001-reasoning-core/](specs/001-reasoning-core/) (núcleo de raciocínio),
 [specs/002-reflection-layer/](specs/002-reflection-layer/) (camada de
-reflexão), [specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP) e
+reflexão), [specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP),
 [specs/004-sqlite-persistence/](specs/004-sqlite-persistence/) (persistência
-em SQLite).
+em SQLite), [specs/005-provider-status-tool/](specs/005-provider-status-tool/)
+(status de provedores externos) e
+[specs/006-mcp-server/](specs/006-mcp-server/) (servidor MCP).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 

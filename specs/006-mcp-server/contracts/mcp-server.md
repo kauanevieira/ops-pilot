@@ -36,7 +36,7 @@ Nenhuma credencial de modelo é lida ou exigida. `.env` é carregado se existir.
 |---|---|
 | `serverInfo.name` | `opspilot` |
 | `serverInfo.version` | `version` do `package.json` (hoje `0.1.0`) |
-| `capabilities` | `tools` (sem `resources`, `prompts`, `logging` nem `listChanged`) |
+| `capabilities` | `{ tools: { listChanged: true } }` (sem `resources`, `prompts` nem `logging`; `listChanged` é o default do `McpServer` do SDK — nenhuma notificação de mudança de lista é emitida de fato, o conjunto exposto é fixo) |
 
 ## Ferramentas (`tools/list`)
 

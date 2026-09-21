@@ -53,9 +53,9 @@ aparentemente correto, enquanto o comportamento está errado:
 
 **Purpose**: linha de base e a dependência nova.
 
-- [ ] T001 Confirmar a linha de base: `npm run typecheck` e `npm test` verdes em `main` antes de qualquer mudança, anotando a contagem de testes para comparar em T007
-- [ ] T002 Adicionar `@modelcontextprotocol/sdk@^1.30.0` às `dependencies` com `npm install @modelcontextprotocol/sdk@^1.30.0`, conferir que `npm ls zod` mostra uma única cópia `4.6.5` (R-001) e atualizar `package.json` e `package-lock.json`
-- [ ] T003 Adicionar o script `"mcp": "tsx --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/mcp/server.ts"` em `package.json` (R-006, FR-003, FR-006)
+- [X] T001 Confirmar a linha de base: `npm run typecheck` e `npm test` verdes em `main` antes de qualquer mudança, anotando a contagem de testes para comparar em T007
+- [X] T002 Adicionar `@modelcontextprotocol/sdk@^1.30.0` às `dependencies` com `npm install @modelcontextprotocol/sdk@^1.30.0`, conferir que `npm ls zod` mostra uma única cópia `4.6.5` (R-001) e atualizar `package.json` e `package-lock.json`
+- [X] T003 Adicionar o script `"mcp": "tsx --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/mcp/server.ts"` em `package.json` (R-006, FR-003, FR-006)
 
 ---
 
@@ -65,10 +65,10 @@ aparentemente correto, enquanto o comportamento está errado:
 
 **⚠️ CRITICAL**: nenhuma tarefa de US1–US4 começa antes do portão T007.
 
-- [ ] T004 Criar `src/agents/tool-definitions.ts` com os tipos `ToolOutcome = { text: string; isError: boolean }` e `OpsToolDefinition<S extends z.ZodObject>` (`name`, `description`, `schema: S`, `run(args: z.infer<S>): Promise<ToolOutcome>`), conforme [data-model.md](./data-model.md)
-- [ ] T005 Em `src/agents/tool-definitions.ts`, implementar `defineOpsTools(store: OpsRepository, deps: { fetchImpl?: typeof fetch } = {})`, que devolve as 6 definições indexadas pelo nome. **Mover** (não copiar) de `src/agents/tools.ts` as descrições, os esquemas e os corpos. `DomainError` vira `{ text: JSON.stringify({ error: message }), isError: true }`, e exceção não-domínio propaga. `check_provider_status` devolve sempre `isError: false`. Manter os comentários de rastreabilidade (FR-029a etc.) junto do código movido
-- [ ] T006 Reescrever `src/agents/tools.ts` como adaptador LangChain: `createOpsTools(store, deps)` mantém assinatura e ordem de retorno, e constrói cada `tool(async (args) => (await def.run(args)).text, { name, description, schema })` a partir de `defineOpsTools`. Nenhum literal de descrição ou esquema pode restar em `tools.ts`. Se a inferência genérica do `tool()` brigar com o array heterogêneo, construir as 6 explicitamente pelo nome, em vez de usar `as any`
-- [ ] T007 **Portão da extração**: `npm run typecheck` e `npm test` verdes **sem alterar nenhum arquivo de teste existente**, em especial `src/agents/tools.test.ts`, com a mesma contagem de testes de T001. `react.ts` e `plan-and-execute.ts` não podem ter sido tocados
+- [X] T004 Criar `src/agents/tool-definitions.ts` com os tipos `ToolOutcome = { text: string; isError: boolean }` e `OpsToolDefinition<S extends z.ZodObject>` (`name`, `description`, `schema: S`, `run(args: z.infer<S>): Promise<ToolOutcome>`), conforme [data-model.md](./data-model.md)
+- [X] T005 Em `src/agents/tool-definitions.ts`, implementar `defineOpsTools(store: OpsRepository, deps: { fetchImpl?: typeof fetch } = {})`, que devolve as 6 definições indexadas pelo nome. **Mover** (não copiar) de `src/agents/tools.ts` as descrições, os esquemas e os corpos. `DomainError` vira `{ text: JSON.stringify({ error: message }), isError: true }`, e exceção não-domínio propaga. `check_provider_status` devolve sempre `isError: false`. Manter os comentários de rastreabilidade (FR-029a etc.) junto do código movido
+- [X] T006 Reescrever `src/agents/tools.ts` como adaptador LangChain: `createOpsTools(store, deps)` mantém assinatura e ordem de retorno, e constrói cada `tool(async (args) => (await def.run(args)).text, { name, description, schema })` a partir de `defineOpsTools`. Nenhum literal de descrição ou esquema pode restar em `tools.ts`. Se a inferência genérica do `tool()` brigar com o array heterogêneo, construir as 6 explicitamente pelo nome, em vez de usar `as any`
+- [X] T007 **Portão da extração**: `npm run typecheck` e `npm test` verdes **sem alterar nenhum arquivo de teste existente**, em especial `src/agents/tools.test.ts`, com a mesma contagem de testes de T001. `react.ts` e `plan-and-execute.ts` não podem ter sido tocados
 
 **Checkpoint**: a fonte única existe, e o agente interno se comporta byte a byte como antes.
 
@@ -86,14 +86,14 @@ descrição e esquema da definição interna.
 
 > Escrever primeiro e confirmar que falham (o módulo ainda não existe).
 
-- [ ] T008 [P] [US1] Criar `src/mcp/ops-mcp-server.test.ts` (in-process: `InMemoryTransport.createLinkedPair()` + `Client` do SDK + `SqliteOpsStore(new DatabaseSync(":memory:"))` semeado com `seedDatabase(db, baselineState())`, um store novo por teste). Casos: (a) `getServerVersion()` tem `name === "opspilot"` e `version` igual ao do `package.json`; (b) `listTools()` devolve exatamente `["list_alerts", "list_incidents", "open_incident", "resolve_incident"]`, comparados como conjunto ordenado
-- [ ] T009 [P] [US1] Criar `src/mcp/server.test.ts` com o **teste pedido**: spawnar `process.execPath` com `["--disable-warning=ExperimentalWarning", "--import", "tsx", "src/mcp/server.ts"]`, `cwd` na raiz do repo, `env: { PATH: process.env.PATH, OPSPILOT_DB: ":memory:" }` e `stderr: "pipe"` via `StdioClientTransport`. Verificar `serverInfo.name === "opspilot"` e a lista exata das 4 ferramentas. Fechar o client em `after`/`finally`, mesmo em falha, para não deixar processo órfão (FR-027)
+- [X] T008 [P] [US1] Criar `src/mcp/ops-mcp-server.test.ts` (in-process: `InMemoryTransport.createLinkedPair()` + `Client` do SDK + `SqliteOpsStore(new DatabaseSync(":memory:"))` semeado com `seedDatabase(db, baselineState())`, um store novo por teste). Casos: (a) `getServerVersion()` tem `name === "opspilot"` e `version` igual ao do `package.json`; (b) `listTools()` devolve exatamente `["list_alerts", "list_incidents", "open_incident", "resolve_incident"]`, comparados como conjunto ordenado
+- [X] T009 [P] [US1] Criar `src/mcp/server.test.ts` com o **teste pedido**: spawnar `process.execPath` com `["--disable-warning=ExperimentalWarning", "--import", "tsx", "src/mcp/server.ts"]`, `cwd` na raiz do repo, `env: { PATH: process.env.PATH, OPSPILOT_DB: ":memory:" }` e `stderr: "pipe"` via `StdioClientTransport`. Verificar `serverInfo.name === "opspilot"` e a lista exata das 4 ferramentas. Fechar o client em `after`/`finally`, mesmo em falha, para não deixar processo órfão (FR-027)
 
 ### Implementation for User Story 1
 
-- [ ] T010 [US1] Criar `src/mcp/ops-mcp-server.ts`: exportar `MCP_TOOL_NAMES = ["list_alerts", "list_incidents", "open_incident", "resolve_incident"] as const` e `createOpsMcpServer(store: OpsRepository): McpServer`. Nome `opspilot`, versão via `import pkg from "../../package.json" with { type: "json" }`. Para cada nome da lista, buscar em `defineOpsTools(store)` e lançar erro se não existir (R-003). Registrar com `server.registerTool(def.name, { description: def.description, inputSchema: def.schema }, async (args) => { const o = await def.run(args); return { content: [{ type: "text", text: o.text }], isError: o.isError }; })`. Nenhum literal de descrição ou esquema neste arquivo
-- [ ] T011 [US1] Criar `src/mcp/server.ts` (entrada, R-007): helper `diag(msg: string)` que escreve `[opspilot-mcp] <msg>\n` em `process.stderr`; `main()` async que abre com `openDatabase()`, cria `new SqliteOpsStore(db)`, roda `seedDatabase(db, baselineState())` nessa ordem (espelhando `src/index.ts`), chama `createOpsMcpServer(store).connect(new StdioServerTransport())` e depois `diag("pronto (stdio)")`. **Nenhum** `console.*` e nenhum `process.stdout` no arquivo
-- [ ] T012 [US1] Rodar T008 e T009 até ficarem verdes; `npm run typecheck` verde
+- [X] T010 [US1] Criar `src/mcp/ops-mcp-server.ts`: exportar `MCP_TOOL_NAMES = ["list_alerts", "list_incidents", "open_incident", "resolve_incident"] as const` e `createOpsMcpServer(store: OpsRepository): McpServer`. Nome `opspilot`, versão via `import pkg from "../../package.json" with { type: "json" }`. Para cada nome da lista, buscar em `defineOpsTools(store)` e lançar erro se não existir (R-003). Registrar com `server.registerTool(def.name, { description: def.description, inputSchema: def.schema }, async (args) => { const o = await def.run(args); return { content: [{ type: "text", text: o.text }], isError: o.isError }; })`. Nenhum literal de descrição ou esquema neste arquivo
+- [X] T011 [US1] Criar `src/mcp/server.ts` (entrada, R-007): helper `diag(msg: string)` que escreve `[opspilot-mcp] <msg>\n` em `process.stderr`; `main()` async que abre com `openDatabase()`, cria `new SqliteOpsStore(db)`, roda `seedDatabase(db, baselineState())` nessa ordem (espelhando `src/index.ts`), chama `createOpsMcpServer(store).connect(new StdioServerTransport())` e depois `diag("pronto (stdio)")`. **Nenhum** `console.*` e nenhum `process.stdout` no arquivo
+- [X] T012 [US1] Rodar T008 e T009 até ficarem verdes; `npm run typecheck` verde
 
 **Checkpoint**: MVP integrável. Um cliente MCP registra o OpsPilot e vê as 4 ferramentas.
 
@@ -109,12 +109,12 @@ que o teste segura (Princípio V: estado, não texto).
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T013 [US2] Em `src/mcp/ops-mcp-server.test.ts`, casos de execução com inspeção do store:
+- [X] T013 [US2] Em `src/mcp/ops-mcp-server.test.ts`, casos de execução com inspeção do store:
   - `list_alerts {}` devolve os alertas `firing` do seed, igual a `store.listAlerts("firing")`.
   - `list_incidents {}` devolve só os `open`.
   - `open_incident { title, service: "checkout", severity: "high" }`: `store.listIncidents("open")` passa a conter o incidente, e o texto é o JSON dele.
   - `resolve_incident { id }` sobre esse incidente: `store.getIncident(id)?.status === "resolved"` e `resolvedAt` não nulo.
-- [ ] T014 [US2] Em `src/mcp/ops-mcp-server.test.ts`, casos de erro, todos com a sessão ainda utilizável no final (uma chamada `list_alerts` seguinte funciona):
+- [X] T014 [US2] Em `src/mcp/ops-mcp-server.test.ts`, casos de erro, todos com a sessão ainda utilizável no final (uma chamada `list_alerts` seguinte funciona):
   - `open_incident` com serviço inexistente: `isError: true`, texto `{"error": ...}`, contagem de incidentes inalterada.
   - `resolve_incident { id: "inc-nope" }`: `isError: true`.
   - `resolve_incident` num incidente já resolvido: `isError: true`, `resolvedAt` original preservado.
@@ -122,13 +122,13 @@ que o teste segura (Princípio V: estado, não texto).
   - `open_incident` sem `title`: `isError: true`.
   - `consultar_runbook` e `check_provider_status`: `isError: true` com `not found`.
   - `list_alerts {}` com store vazio: `isError` falso e texto `[]` (vazio não é erro).
-- [ ] T015 [US2] Em `src/mcp/ops-mcp-server.test.ts`, caso de paridade (FR-016): para os mesmos argumentos sobre dois stores semeados idênticos, `content[0].text` do MCP é igual ao retorno de `createOpsTools(store).find(t => t.name === ...).invoke(args)`, para `list_alerts` e `list_incidents`. Não vale para `open_incident`, porque id e horário variam
+- [X] T015 [US2] Em `src/mcp/ops-mcp-server.test.ts`, caso de paridade (FR-016): para os mesmos argumentos sobre dois stores semeados idênticos, `content[0].text` do MCP é igual ao retorno de `createOpsTools(store).find(t => t.name === ...).invoke(args)`, para `list_alerts` e `list_incidents`. Não vale para `open_incident`, porque id e horário variam
 
 ### Implementation for User Story 2
 
-- [ ] T016 [US2] Em `src/mcp/ops-mcp-server.ts`, envolver a chamada a `def.run` num `try/catch` que, para exceção **não-domínio**, chama um callback `onTechnicalError?(toolName, error)` recebido em `createOpsMcpServer(store, { onTechnicalError })` e **relança**, para o SDK converter em `isError` (R-004, FR-014). Em `src/mcp/server.ts`, passar `onTechnicalError` usando `diag`
-- [ ] T017 [US2] Teste de falha técnica em `src/mcp/ops-mcp-server.test.ts`: um `OpsRepository` dublê cujo `listAlerts` lança `new Error("boom")`. Esperar `isError: true` com `boom`, `onTechnicalError` chamado uma vez com `list_alerts`, e a sessão continuando
-- [ ] T018 [US2] Rodar a suíte; T013–T017 verdes
+- [X] T016 [US2] Em `src/mcp/ops-mcp-server.ts`, envolver a chamada a `def.run` num `try/catch` que, para exceção **não-domínio**, chama um callback `onTechnicalError?(toolName, error)` recebido em `createOpsMcpServer(store, { onTechnicalError })` e **relança**, para o SDK converter em `isError` (R-004, FR-014). Em `src/mcp/server.ts`, passar `onTechnicalError` usando `diag`
+- [X] T017 [US2] Teste de falha técnica em `src/mcp/ops-mcp-server.test.ts`: um `OpsRepository` dublê cujo `listAlerts` lança `new Error("boom")`. Esperar `isError: true` com `boom`, `onTechnicalError` chamado uma vez com `list_alerts`, e a sessão continuando
+- [X] T018 [US2] Rodar a suíte; T013–T017 verdes
 
 **Checkpoint**: US1 e US2 funcionam; o cliente MCP lê e escreve incidentes reais.
 
@@ -144,7 +144,7 @@ falha de configuração.
 
 ### Tests for User Story 3 ⚠️
 
-- [ ] T019 [P] [US3] Em `src/mcp/server.test.ts`, teste de stdout bruto (SC-004): `spawn` direto (sem SDK), mesmo comando e `env` de T009. Escrever no stdin, uma por linha:
+- [X] T019 [P] [US3] Em `src/mcp/server.test.ts`, teste de stdout bruto (SC-004): `spawn` direto (sem SDK), mesmo comando e `env` de T009. Escrever no stdin, uma por linha:
   - `initialize`;
   - `notifications/initialized`;
   - `tools/list`;
@@ -157,15 +157,15 @@ falha de configuração.
   - o stderr contém `pronto`.
 
   Usar timeout do teste (ex.: 10 s) e `kill()` no `finally`.
-- [ ] T020 [P] [US3] Em `src/mcp/server.test.ts`, teste de falha de configuração (FR-021): spawn com `OPSPILOT_DB: ""` e stdin fechado. Esperar código de saída 1, stdout com **0 bytes** e stderr contendo `OPSPILOT_DB inválida`
-- [ ] T021 [P] [US3] Em `src/mcp/server.test.ts`, varredura estática (FR-018, SC-005): ler todo `src/mcp/*.ts` que não termine em `.test.ts` e afirmar que nenhum casa com `/console\.(log|info|debug)\b|process\.stdout/`. Afirmar também que `ops-mcp-server.ts` importa de `../agents/tool-definitions.ts` e **não** de `../agents/tools.ts` (armadilha 2)
+- [X] T020 [P] [US3] Em `src/mcp/server.test.ts`, teste de falha de configuração (FR-021): spawn com `OPSPILOT_DB: ""` e stdin fechado. Esperar código de saída 1, stdout com **0 bytes** e stderr contendo `OPSPILOT_DB inválida`
+- [X] T021 [P] [US3] Em `src/mcp/server.test.ts`, varredura estática (FR-018, SC-005): ler todo `src/mcp/*.ts` que não termine em `.test.ts` e afirmar que nenhum casa com `/console\.(log|info|debug)\b|process\.stdout/`. Afirmar também que `ops-mcp-server.ts` importa de `../agents/tool-definitions.ts` e **não** de `../agents/tools.ts` (armadilha 2)
 
 ### Implementation for User Story 3
 
-- [ ] T022 [US3] Em `src/mcp/server.ts`, guarda de runtime (R-005): a primeira instrução de `main()` redireciona `console.log`, `console.info` e `console.debug` para escrever no stderr, com um comentário explicando que o stdout é o canal do protocolo. Usar atribuição a partir de `console.error`, sem mencionar `process.stdout`, para não quebrar T021
-- [ ] T023 [US3] Em `src/mcp/server.ts`, tratar falha de inicialização (R-009): `main().catch((error) => { diag(error instanceof Error ? error.message : String(error)); process.exit(1); })`
-- [ ] T024 [US3] Em `src/mcp/server.ts`, encerramento limpo (R-008, FR-022): função `shutdown(reason)` idempotente (flag) que chama `await server.close()`, `store.close()`, `diag(\`encerrado (${reason})\`)` e `process.exit(0)`. Registrar em `process.stdin.once("end", ...)`, `process.once("SIGINT", ...)` e `process.once("SIGTERM", ...)`
-- [ ] T025 [US3] Rodar T019–T021 até ficarem verdes
+- [X] T022 [US3] Em `src/mcp/server.ts`, guarda de runtime (R-005): a primeira instrução de `main()` redireciona `console.log`, `console.info` e `console.debug` para escrever no stderr, com um comentário explicando que o stdout é o canal do protocolo. Usar atribuição a partir de `console.error`, sem mencionar `process.stdout`, para não quebrar T021
+- [X] T023 [US3] Em `src/mcp/server.ts`, tratar falha de inicialização (R-009): `main().catch((error) => { diag(error instanceof Error ? error.message : String(error)); process.exit(1); })`
+- [X] T024 [US3] Em `src/mcp/server.ts`, encerramento limpo (R-008, FR-022): função `shutdown(reason)` idempotente (flag) que chama `await server.close()`, `store.close()`, `diag(\`encerrado (${reason})\`)` e `process.exit(0)`. Registrar em `process.stdin.once("end", ...)`, `process.once("SIGINT", ...)` e `process.once("SIGTERM", ...)`
+- [X] T025 [US3] Rodar T019–T021 até ficarem verdes
 
 **Checkpoint**: nenhuma forma conhecida de escrever texto solto no stdout.
 
@@ -177,9 +177,9 @@ falha de configuração.
 
 **Independent Test**: comparar descrição e `inputSchema` anunciados com os da definição.
 
-- [ ] T026 [US4] Em `src/mcp/ops-mcp-server.test.ts`, teste de igualdade (FR-025, SC-003): para cada ferramenta de `listTools()`, `tool.description === defs[tool.name].description` e `assert.deepStrictEqual(tool.inputSchema, z.toJSONSchema(defs[tool.name].schema, { target: "draft-7", io: "input" }))`, com `defs = defineOpsTools(store)`. Oráculo verificado em R-001
-- [ ] T027 [US4] Em `src/mcp/ops-mcp-server.test.ts`, teste de propagação (FR-011): a descrição e o schema anunciados para `list_alerts` são os mesmos que `createOpsTools(store)` expõe ao agente interno (`description` e `z.toJSONSchema(tool.schema, ...)`). Isso fecha o triângulo: definição = LangChain = MCP
-- [ ] T028 [US4] Conferir por inspeção que `src/mcp/ops-mcp-server.ts` e `src/agents/tools.ts` não contêm nenhum literal de descrição (`grep -n "Use quando" src/mcp src/agents/tools.ts` sem resultado) e que `src/agents/tool-definitions.ts` é o único arquivo com esses literais
+- [X] T026 [US4] Em `src/mcp/ops-mcp-server.test.ts`, teste de igualdade (FR-025, SC-003): para cada ferramenta de `listTools()`, `tool.description === defs[tool.name].description` e `assert.deepStrictEqual(tool.inputSchema, z.toJSONSchema(defs[tool.name].schema, { target: "draft-7", io: "input" }))`, com `defs = defineOpsTools(store)`. Oráculo verificado em R-001
+- [X] T027 [US4] Em `src/mcp/ops-mcp-server.test.ts`, teste de propagação (FR-011): a descrição e o schema anunciados para `list_alerts` são os mesmos que `createOpsTools(store)` expõe ao agente interno (`description` e `z.toJSONSchema(tool.schema, ...)`). Isso fecha o triângulo: definição = LangChain = MCP
+- [X] T028 [US4] Conferir por inspeção que `src/mcp/ops-mcp-server.ts` e `src/agents/tools.ts` não contêm nenhum literal de descrição (`grep -n "Use quando" src/mcp src/agents/tools.ts` sem resultado) e que `src/agents/tool-definitions.ts` é o único arquivo com esses literais
 
 **Checkpoint**: todas as histórias entregues e verificadas.
 
@@ -187,17 +187,17 @@ falha de configuração.
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T029 [P] Atualizar o comentário de cabeçalho de `src/agents/tools.ts` para apontar a fonte única (`tool-definitions.ts`) e os dois adaptadores, e mover para `tool-definitions.ts` o texto sobre as 6 regras e `deps.fetchImpl`
-- [ ] T030 [P] Atualizar `README.md` na seção "Estrutura": incluir `src/mcp/` e `src/agents/tool-definitions.ts`
-- [ ] T031 [P] Adicionar ao `README.md` a seção "Servidor MCP":
+- [X] T029 [P] Atualizar o comentário de cabeçalho de `src/agents/tools.ts` para apontar a fonte única (`tool-definitions.ts`) e os dois adaptadores, e mover para `tool-definitions.ts` o texto sobre as 6 regras e `deps.fetchImpl`
+- [X] T030 [P] Atualizar `README.md` na seção "Estrutura": incluir `src/mcp/` e `src/agents/tool-definitions.ts`
+- [X] T031 [P] Adicionar ao `README.md` a seção "Servidor MCP":
   - o que é e as 4 ferramentas;
   - registro com `claude mcp add opspilot -- npm --prefix "$PWD" run --silent mcp`;
   - o bloco JSON genérico de [contracts/mcp-server.md](./contracts/mcp-server.md);
   - aviso em destaque de que `--silent` é obrigatório e por quê (R-006);
   - `OPSPILOT_DB` compartilhado com a API HTTP.
-- [ ] T032 Conferir [contracts/mcp-server.md](./contracts/mcp-server.md) contra o comportamento real: textos de erro do SDK, `capabilities` anunciadas, versão. Corrigir o contrato se divergir (Princípio III)
-- [ ] T033 Rodar o [quickstart.md](./quickstart.md), passos 1 a 3 (portões, stdout limpo manual com e sem `--silent`, falha de configuração), e registrar o resultado
-- [ ] T034 Portão final: `npm run typecheck` e `npm test` verdes, sem rede e sem `.env`, com a suíte inteira abaixo de 30 s (SC-009)
+- [X] T032 Conferir [contracts/mcp-server.md](./contracts/mcp-server.md) contra o comportamento real: textos de erro do SDK, `capabilities` anunciadas, versão. Corrigir o contrato se divergir (Princípio III)
+- [X] T033 Rodar o [quickstart.md](./quickstart.md), passos 1 a 3 (portões, stdout limpo manual com e sem `--silent`, falha de configuração), e registrar o resultado
+- [X] T034 Portão final: `npm run typecheck` e `npm test` verdes, sem rede e sem `.env`, com a suíte inteira abaixo de 30 s (SC-009)
 
 ---
 

@@ -11,6 +11,7 @@
     "arena": "tsx --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/arena.ts",
     "bench": "tsx --env-file-if-exists=.env src/bench.ts",
     "seed": "tsx --disable-warning=ExperimentalWarning src/scripts/seed.ts",
+    "mcp": "tsx --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/mcp/server.ts",
     "test": "node --disable-warning=ExperimentalWarning --import tsx --test src/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
@@ -18,6 +19,7 @@
     "@langchain/core": "^1.2.11",
     "@langchain/langgraph": "^1.4.15",
     "@langchain/openai": "^1.5.13",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "express": "^5.2.1",
     "zod": "^4.6.5"
   },
