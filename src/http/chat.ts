@@ -4,16 +4,23 @@ import type { OpsRepository } from "../store/repository.ts";
 import type { ConversationStore } from "../store/conversation-store.ts";
 import { DEFAULT_MAX_ITERATIONS, UnknownStrategyError, type ResolveStrategy } from "../agents/index.ts";
 import type { ReasoningStrategy } from "../agents/types.ts";
-import { HISTORY_WINDOW, withConversationHistory } from "../agents/conversation-history.ts";
+import { withConversationHistory } from "../agents/conversation-history.ts";
 import { ConversationNotFoundError } from "../domain/errors.ts";
-import { userIdSchema, type ConversationMessage, type RecalledMemory } from "../domain/schemas.ts";
+import { userIdSchema, type RecalledMemory } from "../domain/schemas.ts";
 import type { MemoryStore } from "../memory/memory-store.ts";
 import { createMemoryTools } from "../memory/memory-tools.ts";
 import { withMemory } from "../memory/with-memory.ts";
 import type { LearningReflector, LearningOutcome } from "../memory/learning-reflector.ts";
 import { toErrorBody, zodIssuesToDetails } from "./errors.ts";
 import { buildContextBreakdown } from "../context/breakdown.ts";
-import type { StrategyResult } from "../trace/types.ts";
+import {
+  prepareConversationContext,
+  EMPTY_CONVERSATION_CONTEXT,
+  SUMMARY_TIMEOUT_MS,
+  type ConversationContext,
+} from "../context/conversation-context.ts";
+import type { Summarizer } from "../context/summarizer.ts";
+import type { StrategyResult, TraceEvent } from "../trace/types.ts";
 
 /**
  * Validates only the SHAPE of the body (R-003): whether `strategy` names a
@@ -60,6 +67,10 @@ export interface CreateChatHandlerOptions {
   resolveStrategy: ResolveStrategy;
   /** FR-018: 180_000 in production; injected short in tests (FR-025). */
   timeoutMs: number;
+  /** 011-history-summarization: durable/fake conversation summarizer. */
+  summarizer: Summarizer;
+  /** 011-history-summarization, FR-010: default SUMMARY_TIMEOUT_MS (30s); injected short in tests. */
+  summaryTimeoutMs?: number;
 }
 
 /**
@@ -70,7 +81,17 @@ export interface CreateChatHandlerOptions {
  * 200. Nothing past a failed step runs.
  */
 export function createChatHandler(options: CreateChatHandlerOptions): RequestHandler {
-  const { store, conversationStore, memoryStore, learn, onLearning, resolveStrategy, timeoutMs } = options;
+  const {
+    store,
+    conversationStore,
+    memoryStore,
+    learn,
+    onLearning,
+    resolveStrategy,
+    timeoutMs,
+    summarizer,
+    summaryTimeoutMs = SUMMARY_TIMEOUT_MS,
+  } = options;
 
   return (req, res, next) => {
     const parsed = chatRequestSchema.safeParse(req.body);
@@ -103,12 +124,15 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
     }
 
     // FR-013/R-002: a well-formed id that doesn't exist is 404, checked
-    // BEFORE any execution starts. Absent `conversationId`, history is
-    // empty and a conversation is only created after success (R-006,
-    // FR-015) — a failed request must not leave a conversation behind.
-    let history: ConversationMessage[];
+    // BEFORE any execution starts. Absent `conversationId`, there is no
+    // conversation to check, and a conversation is only created after
+    // success (R-006, FR-015) — a failed request must not leave a
+    // conversation behind. 011-history-summarization (R-013): this is now
+    // a `countMessages` existence check, not a read of the messages
+    // themselves — the actual verbatim window is resolved later, inside
+    // `runChat`, together with the summary.
     try {
-      history = conversationId ? conversationStore.lastMessages(conversationId, HISTORY_WINDOW) : [];
+      if (conversationId) conversationStore.countMessages(conversationId);
     } catch (error) {
       if (error instanceof ConversationNotFoundError) {
         res
@@ -134,11 +158,16 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
     // the request proceeds — losing memory degrades the answer, it doesn't
     // corrupt it, unlike a failure inside the strategy's own tool calls.
     //
-    // Composition (R-012, matching 007's R-008): withMemory wraps the base
-    // `strategy` (which may already be withReflection-wrapped by
+    // 011-history-summarization (R-005): the conversation context is
+    // prepared in PARALLEL with recall — the two are independent, both
+    // fail-open, and running them together avoids summing their latencies.
+    //
+    // Composition (R-012, matching 007's R-008; 011's H6): withMemory wraps
+    // the base `strategy` (which may already be withReflection-wrapped by
     // resolveStrategy) BEFORE withConversationHistory wraps everything —
-    // so the final text is facts, then history, then the message, and both
-    // decorators' metrics survive withReflection rebuilding `metrics`.
+    // so the final text is facts, then summary, then history, then the
+    // message, and every decorator's metrics survive withReflection
+    // rebuilding `metrics`.
     async function runChat(): Promise<StrategyResult> {
       let strategyToRun: ReasoningStrategy = strategy;
       // 010-context-measurement: declared here (not inside the `if`) so
@@ -146,26 +175,53 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
       // ANY request — `[]` without a userId is the correct input for
       // FR-011's "absent source is 0", not a special case.
       let memories: RecalledMemory[] = [];
+
+      const [conversationContext] = await Promise.all([
+        conversationId
+          ? prepareConversationContext({ conversationStore, summarizer, timeoutMs: summaryTimeoutMs }, conversationId, controller.signal)
+          : Promise.resolve<ConversationContext>(EMPTY_CONVERSATION_CONTEXT),
+        userId
+          ? memoryStore
+              .recall(userId, message)
+              .then((recalled) => {
+                memories = recalled;
+              })
+              .catch((error: unknown) => {
+                console.error("Falha ao recuperar memória semântica:", error);
+              })
+          : Promise.resolve(),
+      ]);
+
       if (userId) {
-        try {
-          memories = await memoryStore.recall(userId, message);
-        } catch (error) {
-          console.error("Falha ao recuperar memória semântica:", error);
-        }
         strategyToRun = withMemory(strategyToRun, { memories, tools: createMemoryTools(memoryStore, userId) });
       }
-      const finalStrategy = withConversationHistory(strategyToRun, history);
+      const finalStrategy = withConversationHistory(strategyToRun, conversationContext);
       const result = await finalStrategy.run(message, {
         maxIterations: DEFAULT_MAX_ITERATIONS,
         signal: controller.signal,
       });
 
-      // 010-context-measurement, R-008: anchored HERE, outside every
-      // decorator — `withReflection` rebuilds `metrics` from scratch on
-      // every return, so anything attached inside it would be lost. The
-      // estimate uses the same `message`/`history`/`memories` the
-      // decorators above just composed the strategy's input from.
-      return { ...result, metrics: { ...result.metrics, contextBreakdown: buildContextBreakdown({ message, history, memories }) } };
+      // 010-context-measurement, R-008 (amended by 011, R-011): anchored
+      // HERE, outside every decorator — `withReflection` rebuilds `metrics`
+      // from scratch on every return, so anything attached inside it would
+      // be lost. The `summarize` trace event, if any, goes at position 0,
+      // before the strategy's own trace.
+      const trace: TraceEvent[] = conversationContext.summarizeEvent
+        ? [conversationContext.summarizeEvent, ...result.trace]
+        : result.trace;
+      return {
+        ...result,
+        trace,
+        metrics: {
+          ...result.metrics,
+          contextBreakdown: buildContextBreakdown({
+            message,
+            history: conversationContext.messages,
+            summary: conversationContext.summary,
+            memories,
+          }),
+        },
+      };
     }
 
     const runPromise = runChat();

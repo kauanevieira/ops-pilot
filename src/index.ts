@@ -7,6 +7,7 @@ import { SqliteConversationStore } from "./store/sqlite-conversation-store.ts";
 import { SqliteMemoryStore } from "./memory/memory-store.ts";
 import { createLocalEmbedder } from "./memory/embeddings.ts";
 import { createModelDistiller } from "./memory/distiller.ts";
+import { createModelSummarizer } from "./context/summarizer.ts";
 import { baselineState } from "./store/seed.ts";
 
 /**
@@ -55,7 +56,12 @@ function main(): void {
   // the reflector invokes it, which is when OPENROUTER_* is required.
   const distiller = createModelDistiller();
 
-  const app = createApp({ store, conversationStore, memoryStore, distiller });
+  // 011-history-summarization: same pattern as `distiller` — constructing
+  // it reads no environment variable; only a request that reaches the
+  // recent-window boundary actually invokes it.
+  const summarizer = createModelSummarizer();
+
+  const app = createApp({ store, conversationStore, memoryStore, distiller, summarizer });
 
   app.listen(port, () => {
     console.log(`OpsPilot ouvindo em http://localhost:${port}`);
