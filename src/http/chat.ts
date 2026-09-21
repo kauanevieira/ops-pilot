@@ -10,6 +10,7 @@ import { userIdSchema, type ConversationMessage, type RecalledMemory } from "../
 import type { MemoryStore } from "../memory/memory-store.ts";
 import { createMemoryTools } from "../memory/memory-tools.ts";
 import { withMemory } from "../memory/with-memory.ts";
+import type { LearningReflector, LearningOutcome } from "../memory/learning-reflector.ts";
 import { toErrorBody, zodIssuesToDetails } from "./errors.ts";
 import type { StrategyResult } from "../trace/types.ts";
 
@@ -45,6 +46,16 @@ export interface CreateChatHandlerOptions {
   conversationStore: ConversationStore;
   /** 008-semantic-memory: durable/fake semantic memory store. */
   memoryStore: MemoryStore;
+  /**
+   * 009-learning-reflector: examines the raw message after a successful
+   * response and saves at most one durable fact through `memoryStore`
+   * (contracts/learning-reflector.md). Never awaited by the handler
+   * (FR-002) — its promise never rejects (R-007), so nothing here needs to
+   * catch a failure from it, only hand its outcome to `onLearning`.
+   */
+  learn: LearningReflector;
+  /** Production: logs the outcome. Tests: a probe that resolves a promise (FR-023). */
+  onLearning: (outcome: LearningOutcome) => void;
   resolveStrategy: ResolveStrategy;
   /** FR-018: 180_000 in production; injected short in tests (FR-025). */
   timeoutMs: number;
@@ -58,7 +69,7 @@ export interface CreateChatHandlerOptions {
  * 200. Nothing past a failed step runs.
  */
 export function createChatHandler(options: CreateChatHandlerOptions): RequestHandler {
-  const { store, conversationStore, memoryStore, resolveStrategy, timeoutMs } = options;
+  const { store, conversationStore, memoryStore, learn, onLearning, resolveStrategy, timeoutMs } = options;
 
   return (req, res, next) => {
     const parsed = chatRequestSchema.safeParse(req.body);
@@ -184,6 +195,16 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
 
         const body: ChatResponse = { ...result, conversationId: resolvedConversationId };
         res.status(200).json(body);
+
+        // 009-learning-reflector, FR-001 to FR-003: fired only here, AFTER
+        // the response body was handed to Express — never awaited, so it
+        // cannot delay or alter what the client already received (FR-002).
+        // Only a request with a userId that reached this success branch
+        // triggers it; every earlier `return` (400/404/422/504) and the
+        // 500 path in the outer `.catch` below never reach this line.
+        if (userId) {
+          void learn(userId, message).then(onLearning, () => {});
+        }
       })
       .catch((error: unknown) => {
         clearTimeout(timer);

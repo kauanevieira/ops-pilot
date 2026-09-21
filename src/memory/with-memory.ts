@@ -6,7 +6,7 @@ import type { StrategyResult } from "../trace/types.ts";
 export interface WithMemoryOptions {
   /** The facts recalled for THIS request (already capped/filtered by the store). */
   memories: RecalledMemory[];
-  /** remember_fact/forget_fact, already scoped to one userId. */
+  /** forget_preference, already scoped to one userId (009: only memory tool left). */
   tools: ClientTool[];
 }
 
@@ -17,7 +17,7 @@ export interface WithMemoryOptions {
  * delivered structurally. Empty `memories` ⇒ `input` untouched (FR-023).
  *
  * Each fact's id is printed in brackets, because that id is the only way
- * the agent can name a fact to `forget_fact` — it can only forget what was
+ * the agent can name a fact to `forget_preference` — it can only forget what was
  * shown to it here (spec, edge case).
  */
 export function formatMemoriesInput(memories: RecalledMemory[], input: string): string {

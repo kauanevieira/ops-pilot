@@ -6,6 +6,7 @@ import { SqliteOpsStore } from "./store/sqlite-ops-store.ts";
 import { SqliteConversationStore } from "./store/sqlite-conversation-store.ts";
 import { SqliteMemoryStore } from "./memory/memory-store.ts";
 import { createLocalEmbedder } from "./memory/embeddings.ts";
+import { createModelDistiller } from "./memory/distiller.ts";
 import { baselineState } from "./store/seed.ts";
 
 /**
@@ -49,7 +50,12 @@ function main(): void {
   // request that sends a userId actually calls recall/remember.
   const memoryStore = new SqliteMemoryStore(db, createLocalEmbedder());
 
-  const app = createApp({ store, conversationStore, memoryStore });
+  // 009-learning-reflector: constructing the distiller reads no
+  // environment variable (R-002) — only a request that actually reaches
+  // the reflector invokes it, which is when OPENROUTER_* is required.
+  const distiller = createModelDistiller();
+
+  const app = createApp({ store, conversationStore, memoryStore, distiller });
 
   app.listen(port, () => {
     console.log(`OpsPilot ouvindo em http://localhost:${port}`);

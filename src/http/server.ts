@@ -9,6 +9,10 @@ import type { ConversationStore } from "../store/conversation-store.ts";
 import type { MemoryStore } from "../memory/memory-store.ts";
 import { SqliteMemoryStore } from "../memory/memory-store.ts";
 import { createLocalEmbedder } from "../memory/embeddings.ts";
+import type { Distiller } from "../memory/distiller.ts";
+import { createModelDistiller } from "../memory/distiller.ts";
+import type { LearningOutcome } from "../memory/learning-reflector.ts";
+import { createLearningReflector, logLearningOutcome, LEARNING_TIMEOUT_MS } from "../memory/learning-reflector.ts";
 import { createChatHandler } from "./chat.ts";
 import { toErrorBody } from "./errors.ts";
 
@@ -30,6 +34,19 @@ export interface ChatAppDeps {
    * ever calls `embed()`, so a request without one pays nothing (FR-024).
    */
   memoryStore?: MemoryStore;
+  /**
+   * 009-learning-reflector: examines a message's raw text after a
+   * successful response. The default, `createModelDistiller()`, is only
+   * ever CONSTRUCTED here — building it reads no environment variable, so
+   * `createApp()` stays callable without credentials; only invoking it
+   * (which no test does — tests always inject their own) would need
+   * `OPENROUTER_*` (R-002, Princípio V).
+   */
+  distiller?: Distiller;
+  /** FR-015: independent of `timeoutMs` — default `LEARNING_TIMEOUT_MS` (30s). */
+  learningTimeoutMs?: number;
+  /** Production default logs server-side (FR-013); tests inject a probe (FR-023). */
+  onLearning?: (outcome: LearningOutcome) => void;
   resolveStrategy?: ResolveStrategy;
   /** FR-018: milliseconds before a `/chat` request is aborted. */
   timeoutMs?: number;
@@ -45,13 +62,21 @@ export function createApp(deps: ChatAppDeps = {}): Express {
   const store = deps.store ?? new InMemoryOpsRepository(baselineState());
   const conversationStore = deps.conversationStore ?? new InMemoryConversationStore();
   const memoryStore = deps.memoryStore ?? new SqliteMemoryStore(new DatabaseSync(":memory:"), createLocalEmbedder());
+  const distiller = deps.distiller ?? createModelDistiller();
+  const learningTimeoutMs = deps.learningTimeoutMs ?? LEARNING_TIMEOUT_MS;
+  const onLearning = deps.onLearning ?? logLearningOutcome;
   const resolveStrategy = deps.resolveStrategy ?? defaultResolveStrategy;
   const timeoutMs = deps.timeoutMs ?? 180_000;
+
+  const learn = createLearningReflector({ memoryStore, distiller, timeoutMs: learningTimeoutMs });
 
   const app = express();
   app.use(express.json());
 
-  app.post("/chat", createChatHandler({ store, conversationStore, memoryStore, resolveStrategy, timeoutMs }));
+  app.post(
+    "/chat",
+    createChatHandler({ store, conversationStore, memoryStore, learn, onLearning, resolveStrategy, timeoutMs }),
+  );
 
   // Registered after the routes, as Express requires for a 4-arg error
   // handler to be recognized as one.

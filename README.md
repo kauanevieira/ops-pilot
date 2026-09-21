@@ -141,18 +141,28 @@ criada — mas só se o pedido concluir com sucesso.
 
 `userId` liga a memória semântica: com ele, os até 3 fatos mais relevantes
 guardados por aquele usuário (por sentido, não por palavra) entram no que o
-agente recebe, e o agente ganha as ferramentas `remember_fact` (guardar um
-fato — "lembra que...") e `forget_fact` (esquecer um fato pelo id, como
-aparece entre colchetes nos fatos entregues). Memória é por usuário, não por
-conversa: sobrevive entre conversas diferentes. Sem `userId`, nada disso
-acontece, e o comportamento é idêntico ao de antes desta capacidade existir.
+agente recebe. Guardar um fato não é mais coisa do agente: depois de cada
+resposta bem-sucedida, um **refletor de aprendizado** examina a mensagem que
+a pessoa mandou — só ela, nunca a resposta, o histórico ou os fatos
+recuperados — e decide, sem atrasar nem alterar a resposta já entregue, se
+ali havia um fato durável sobre a pessoa (quem é, seu time, seus serviços,
+suas preferências). Pedido pontual ("abre um incidente"), estado da operação
+("o checkout caiu") e qualquer coisa com forma de credencial (senha, token,
+chave de API) nunca são aprendidos — uma verificação determinística barra
+credenciais mesmo que o modelo erre e proponha guardar uma. O agente só
+recebe `forget_preference`, para esquecer um fato pelo id (como aparece
+entre colchetes nos fatos entregues); não há mais ferramenta de guardar.
+Memória é por usuário, não por conversa: sobrevive entre conversas
+diferentes. Sem `userId`, nada disso acontece — nem recuperação, nem
+aprendizado — e o comportamento é idêntico ao de antes desta capacidade
+existir.
 
 ```bash
 curl -s -X POST http://localhost:3000/chat \
   -H 'Content-Type: application/json' \
-  -d '{"userId": "kauane", "message": "lembra que eu sou responsável pelo checkout"}' | jq -r '.answer'
+  -d '{"userId": "kauane", "message": "sou responsável pelo checkout, quais alertas estão abertos?"}' | jq -r '.answer'
 
-# em outra conversa, sem repetir palavras do fato guardado:
+# em outra conversa, sem repetir palavras do fato aprendido:
 curl -s -X POST http://localhost:3000/chat \
   -H 'Content-Type: application/json' \
   -d '{"userId": "kauane", "message": "quais serviços são meus?"}' \
@@ -188,10 +198,12 @@ agente naquele pedido). Com `userId`, `metrics` também traz
 | 500 | `internal` | falha inesperada; nunca vaza detalhe interno |
 
 Um pedido que não conclui com sucesso (400/404/422/504/500) não grava nada
-na conversa — nem a mensagem, nem uma conversa nova. Uma falha ao recuperar
-memória (ex.: modelo indisponível) não derruba o pedido: ele segue sem
-fatos recuperados, com `recalledMemories: 0`, e o erro é só registrado no
-servidor.
+na conversa — nem a mensagem, nem uma conversa nova — e o refletor de
+aprendizado não roda. Uma falha ao recuperar memória (ex.: modelo
+indisponível) não derruba o pedido: ele segue sem fatos recuperados, com
+`recalledMemories: 0`, e o erro é só registrado no servidor. Uma falha do
+refletor (no exame ou ao guardar) também é só registrada no servidor —
+nunca afeta a resposta, que já foi enviada.
 
 O estado operacional (serviços, alertas, incidentes, runbooks) é **compartilhado
 por todas as requisições** do mesmo processo e **persiste em SQLite**
@@ -222,8 +234,9 @@ Detalhes completos (contratos, decisões técnicas, roteiro de validação) em
 [specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP),
 [specs/004-sqlite-persistence/](specs/004-sqlite-persistence/) (persistência),
 [specs/007-persistent-conversation/](specs/007-persistent-conversation/) (conversa
-persistente) e [specs/008-semantic-memory/](specs/008-semantic-memory/) (memória
-semântica).
+persistente), [specs/008-semantic-memory/](specs/008-semantic-memory/) (memória
+semântica) e [specs/009-learning-reflector/](specs/009-learning-reflector/) (refletor
+de aprendizado).
 
 ## Servidor MCP
 
@@ -291,8 +304,12 @@ src/
 ├── memory/    # memória semântica por usuário: embeddings.ts (singleton
 │              # preguiçoso sobre @huggingface/transformers), memory-store.ts
 │              # (MemoryStore, SqliteMemoryStore: remember/recall/forget),
-│              # memory-tools.ts (remember_fact/forget_fact), with-memory.ts
-│              # (decorador que entrega os fatos ao agente)
+│              # memory-tools.ts (só forget_preference), with-memory.ts
+│              # (decorador que entrega os fatos ao agente), secret-guard.ts
+│              # (looksLikeSecret, verificação determinística de credenciais),
+│              # distiller.ts (withStructuredOutput → {hasLearning, fact}),
+│              # learning-reflector.ts (refletor: examina, barra segredo,
+│              # guarda — roda depois da resposta, nunca a atrasa)
 ├── http/      # POST /chat: createApp (server.ts), handler e schema (chat.ts),
 │              # corpo de erro consistente (errors.ts)
 ├── scripts/   # comando de seed (grava no banco SQLite)
@@ -312,8 +329,9 @@ em SQLite), [specs/005-provider-status-tool/](specs/005-provider-status-tool/)
 (status de provedores externos),
 [specs/006-mcp-server/](specs/006-mcp-server/) (servidor MCP),
 [specs/007-persistent-conversation/](specs/007-persistent-conversation/) (conversa
-persistente) e [specs/008-semantic-memory/](specs/008-semantic-memory/) (memória
-semântica).
+persistente), [specs/008-semantic-memory/](specs/008-semantic-memory/) (memória
+semântica) e [specs/009-learning-reflector/](specs/009-learning-reflector/) (refletor
+de aprendizado).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 

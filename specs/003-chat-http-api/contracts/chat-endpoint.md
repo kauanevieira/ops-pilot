@@ -10,8 +10,15 @@
 >
 > **Emendado também por `008-semantic-memory`**: o corpo ganhou `userId` opcional, a
 > resposta ganhou `metrics.recalledMemories` quando `userId` é informado, e o agente
-> passa a dispor das ferramentas `remember_fact`/`forget_fact` nesse caso. Ver
+> passa a dispor das ferramentas `remember_fact`/`forget_fact` nesse caso (substituídas
+> na 009). Ver
 > [`specs/008-semantic-memory/contracts/chat-endpoint.md`](../../008-semantic-memory/contracts/chat-endpoint.md).
+>
+> **Emendado também por `009-learning-reflector`**: com `userId`, o agente passa a
+> dispor só de `forget_preference` (substitui `remember_fact`/`forget_fact`), e fatos
+> duráveis da mensagem são aprendidos automaticamente depois da resposta. Corpo e
+> resposta não mudam. Ver
+> [`specs/009-learning-reflector/contracts/chat-endpoint.md`](../../009-learning-reflector/contracts/chat-endpoint.md).
 
 O único endpoint da feature. Recebe um pedido em linguagem natural, executa uma estratégia
 de raciocínio e devolve o resultado da execução.

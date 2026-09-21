@@ -32,7 +32,7 @@ export function createReactStrategy(store: OpsRepository): ReasoningStrategy {
       const counter = new LlmCallCounter();
 
       // extraTools (008-semantic-memory, R-011): whatever the HTTP handler
-      // scoped to this request (e.g. remember_fact/forget_fact for one
+      // scoped to this request (e.g. forget_preference for one
       // userId), appended to the strategy's own ops tools. Empty/absent for
       // arena, bench and MCP — unchanged behavior.
       const agent = createReactAgent({
