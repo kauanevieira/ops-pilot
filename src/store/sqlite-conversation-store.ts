@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { z } from "zod";
-import { conversationMessageSchema, type ConversationMessage, type NewConversationMessage } from "../domain/schemas.ts";
+import {
+  conversationMessageSchema,
+  conversationSummarySchema,
+  newConversationSummarySchema,
+  type ConversationMessage,
+  type NewConversationMessage,
+  type ConversationSummary,
+  type NewConversationSummary,
+} from "../domain/schemas.ts";
 import { ConversationNotFoundError } from "../domain/errors.ts";
 import type { ConversationStore } from "./conversation-store.ts";
 import { CONVERSATION_SCHEMA_SQL } from "./sqlite-schema.ts";
@@ -11,6 +19,13 @@ interface MessageRow {
   role: string;
   content: string;
   created_at: string;
+}
+
+/** Row shape a SELECT on `conversation_summaries` returns, before domain validation. */
+interface SummaryRow {
+  content: string;
+  covered_messages: number;
+  updated_at: string;
 }
 
 /**
@@ -23,6 +38,19 @@ const messageRowSchema = conversationMessageSchema
   .omit({ createdAt: true })
   .extend({ created_at: z.coerce.date() })
   .transform(({ created_at, ...rest }) => ({ ...rest, createdAt: created_at }));
+
+/**
+ * 011-history-summarization: same translation pattern, for
+ * `conversation_summaries` rows (contracts/conversation-store.md).
+ */
+const summaryRowSchema = conversationSummarySchema
+  .omit({ updatedAt: true, coveredMessages: true })
+  .extend({ covered_messages: z.number().int().positive(), updated_at: z.coerce.date() })
+  .transform(({ covered_messages, updated_at, ...rest }) => ({
+    ...rest,
+    coveredMessages: covered_messages,
+    updatedAt: updated_at,
+  }));
 
 /**
  * Implements `ConversationStore` over `node:sqlite`'s synchronous
@@ -38,6 +66,10 @@ export class SqliteConversationStore implements ConversationStore {
   #selectConversationExists: StatementSync;
   #insertMessage: StatementSync;
   #selectLastMessages: StatementSync;
+  #selectCountMessages: StatementSync;
+  #selectMessagesRange: StatementSync;
+  #selectSummary: StatementSync;
+  #upsertSummary: StatementSync;
 
   constructor(db: DatabaseSync) {
     this.#db = db;
@@ -57,10 +89,40 @@ export class SqliteConversationStore implements ConversationStore {
          WHERE conversation_id = ? ORDER BY id DESC LIMIT ?
        ) ORDER BY id`,
     );
+
+    // --- 011-history-summarization (contracts/conversation-store.md) ----
+    this.#selectCountMessages = this.#db.prepare("SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?");
+    // Position = order by rowid (research R-001): OFFSET/LIMIT over the
+    // existing idx_messages_conversation(conversation_id, id) index.
+    this.#selectMessagesRange = this.#db.prepare(
+      "SELECT role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY id LIMIT ? OFFSET ?",
+    );
+    this.#selectSummary = this.#db.prepare(
+      "SELECT content, covered_messages, updated_at FROM conversation_summaries WHERE conversation_id = ?",
+    );
+    // Conditional write (research R-003, verified against SQLite 3.51.2):
+    // the WHERE on the upsert makes this a no-op (changes: 0) when the
+    // incoming coverage doesn't exceed what's already there — atomic in a
+    // single statement, no separate SELECT-then-UPDATE needed.
+    this.#upsertSummary = this.#db.prepare(
+      `INSERT INTO conversation_summaries (conversation_id, content, covered_messages, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(conversation_id) DO UPDATE SET
+         content = excluded.content,
+         covered_messages = excluded.covered_messages,
+         updated_at = excluded.updated_at
+       WHERE excluded.covered_messages > conversation_summaries.covered_messages`,
+    );
   }
 
   #exists(conversationId: string): boolean {
     return this.#selectConversationExists.get(conversationId) !== undefined;
+  }
+
+  #requireExists(conversationId: string): void {
+    if (!this.#exists(conversationId)) {
+      throw new ConversationNotFoundError(conversationId);
+    }
   }
 
   create(): string {
@@ -70,9 +132,7 @@ export class SqliteConversationStore implements ConversationStore {
   }
 
   append(conversationId: string, messages: NewConversationMessage[]): void {
-    if (!this.#exists(conversationId)) {
-      throw new ConversationNotFoundError(conversationId);
-    }
+    this.#requireExists(conversationId);
     const createdAt = new Date().toISOString();
     // Atomic (R-005): either every message in `messages` is written, or
     // none is — a CHECK violation partway through rolls the whole append
@@ -90,11 +150,41 @@ export class SqliteConversationStore implements ConversationStore {
   }
 
   lastMessages(conversationId: string, limit: number): ConversationMessage[] {
-    if (!this.#exists(conversationId)) {
-      throw new ConversationNotFoundError(conversationId);
-    }
+    this.#requireExists(conversationId);
     if (limit <= 0) return [];
     const rows = this.#selectLastMessages.all(conversationId, limit) as unknown as MessageRow[];
     return rows.map((row) => messageRowSchema.parse(row));
+  }
+
+  countMessages(conversationId: string): number {
+    this.#requireExists(conversationId);
+    const row = this.#selectCountMessages.get(conversationId) as unknown as { n: number };
+    return row.n;
+  }
+
+  messagesRange(conversationId: string, offset: number, limit: number): ConversationMessage[] {
+    this.#requireExists(conversationId);
+    if (offset < 0 || limit <= 0) return [];
+    const rows = this.#selectMessagesRange.all(conversationId, limit, offset) as unknown as MessageRow[];
+    return rows.map((row) => messageRowSchema.parse(row));
+  }
+
+  getSummary(conversationId: string): ConversationSummary | null {
+    this.#requireExists(conversationId);
+    const row = this.#selectSummary.get(conversationId) as unknown as SummaryRow | undefined;
+    if (!row) return null;
+    return summaryRowSchema.parse(row);
+  }
+
+  saveSummary(conversationId: string, summary: NewConversationSummary): boolean {
+    this.#requireExists(conversationId);
+    const parsed = newConversationSummarySchema.parse(summary);
+    const result = this.#upsertSummary.run(
+      conversationId,
+      parsed.content,
+      parsed.coveredMessages,
+      new Date().toISOString(),
+    );
+    return result.changes === 1;
   }
 }

@@ -121,3 +121,36 @@ export const learningDecisionSchema = z.object({
     ),
 });
 export type LearningDecision = z.infer<typeof learningDecisionSchema>;
+
+// --- 011-history-summarization ------------------------------------------------
+
+/**
+ * 200 tokens by the 010 estimate (chars/4, rounded up) — the hard cap a
+ * summary is truncated to (contracts/history-summarization.md, Z5, R-008).
+ * MUST stay in sync with the `CHECK (length(content) BETWEEN 1 AND 800)` on
+ * `conversation_summaries.content` (sqlite-schema.ts); a dedicated test
+ * checks that sync, same pattern as R-007 in 004-sqlite-persistence.
+ */
+export const SUMMARY_MAX_CHARS = 800;
+
+export const summaryContentSchema = z.string().trim().min(1).max(SUMMARY_MAX_CHARS);
+
+/**
+ * A conversation's single cumulative summary (data-model.md). `coveredMessages`
+ * is a position, not a message id (research R-001): messages 0..coveredMessages-1
+ * of the conversation are folded into `content`; it only ever grows.
+ */
+export const conversationSummarySchema = z.object({
+  content: summaryContentSchema,
+  coveredMessages: z.number().int().positive(),
+  updatedAt: z.date(),
+});
+export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
+
+/**
+ * What `ConversationStore.saveSummary` accepts: `updatedAt` is assigned by
+ * the store, at the boundary (Principle I), same pattern as
+ * `newConversationMessageSchema`.
+ */
+export const newConversationSummarySchema = conversationSummarySchema.omit({ updatedAt: true });
+export type NewConversationSummary = z.infer<typeof newConversationSummarySchema>;

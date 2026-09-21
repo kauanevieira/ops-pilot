@@ -67,6 +67,15 @@ CREATE INDEX IF NOT EXISTS idx_alerts_status    ON alerts(status);
  * `role` CHECK MUST stay in sync with `messageRoleSchema`
  * (sqlite-conversation-store.test.ts checks that mechanically, same pattern
  * as R-007 in 004-sqlite-persistence).
+ *
+ * `conversation_summaries` (011-history-summarization, contracts/database-schema.md):
+ * at most one row per conversation — `conversation_id` is its own PRIMARY
+ * KEY, which is also the target `saveSummary`'s `ON CONFLICT` upsert names
+ * (research R-003). `CHECK (length(content) BETWEEN 1 AND 800)` MUST stay in
+ * sync with `SUMMARY_MAX_CHARS` in `domain/schemas.ts` (a dedicated test
+ * checks that sync). `covered_messages` only ever grows — enforced by the
+ * upsert's `WHERE`, not by a CHECK, since SQLite CHECK constraints can't see
+ * the previous row.
  */
 export const CONVERSATION_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS conversations (
@@ -83,6 +92,13 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, id);
+
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+  conversation_id  TEXT PRIMARY KEY REFERENCES conversations(id),
+  content          TEXT NOT NULL CHECK (length(content) BETWEEN 1 AND 800),
+  covered_messages INTEGER NOT NULL CHECK (covered_messages > 0),
+  updated_at       TEXT NOT NULL
+);
 `;
 
 /**
