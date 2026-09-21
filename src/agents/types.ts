@@ -1,3 +1,4 @@
+import type { ClientTool } from "@langchain/core/tools";
 import type { StrategyResult } from "../trace/types.ts";
 
 export const DEFAULT_MAX_ITERATIONS = 12;
@@ -13,6 +14,16 @@ export interface RunOptions {
    * waiting for it.
    */
   signal?: AbortSignal;
+  /**
+   * 008-semantic-memory, R-011: tools added to this run beyond the
+   * strategy's own ops tools — e.g. `remember_fact`/`forget_fact`, scoped to
+   * one userId by the HTTP handler. Generic on purpose: neither the
+   * strategy nor the registry in agents/index.ts needs to know memory
+   * exists. `ClientTool` is exactly the element type `createReactAgent`
+   * accepts in `tools`. Optional and additive — arena, bench and the MCP
+   * server never set it.
+   */
+  extraTools?: ClientTool[];
 }
 
 /** Contract every reasoning strategy implements (FR-001 to FR-006). */

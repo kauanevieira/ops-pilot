@@ -8,6 +8,9 @@ import { InMemoryConversationStore } from "../store/in-memory-conversation-store
 import { baselineState } from "../store/seed.ts";
 import type { ReasoningStrategy, RunOptions } from "../agents/types.ts";
 import type { StrategyResult } from "../trace/types.ts";
+import { SqliteMemoryStore, type MemoryStore } from "../memory/memory-store.ts";
+import { createTableEmbedder, queryVector, axisVector } from "../memory/table-embedder.ts";
+import { DatabaseSync } from "node:sqlite";
 
 // --- Test doubles (R-007, FR-022, FR-023) -----------------------------
 //
@@ -580,6 +583,234 @@ describe("POST /chat — conversa (007, US3 — erros)", () => {
       const res = await postChat(baseUrl, { message: "oi de novo" });
       const body = await jsonOf(res);
       assert.equal(typeof body.conversationId, "string");
+    });
+  });
+});
+
+// --- 008-semantic-memory: fake memory store helper -------------------------
+
+/** A `SqliteMemoryStore` over `:memory:` with a table-driven fake embedder (R-004) — never touches the real model. */
+function fakeMemoryStore(table: Record<string, Float32Array> = {}): MemoryStore {
+  return new SqliteMemoryStore(new DatabaseSync(":memory:"), createTableEmbedder(table));
+}
+
+// --- 008-semantic-memory: User Story 1 --------------------------------------
+
+describe("POST /chat — memória semântica (008, US1)", () => {
+  it("com userId, um fato guardado é recuperado por um pedido relacionado, sem palavra em comum (cenário 2)", async () => {
+    const inputs: string[] = [];
+    const strategy = fakeStrategy("react", async (input) => {
+      inputs.push(input);
+      return fixedResult();
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const memoryStore = fakeMemoryStore({
+      "sou responsável pelo checkout": queryVector(),
+      "quais serviços são meus?": queryVector(),
+    });
+    await memoryStore.remember("kauane", "sou responsável pelo checkout");
+
+    await withServer({ resolveStrategy, memoryStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { userId: "kauane", message: "quais serviços são meus?" });
+      assert.equal(res.status, 200);
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.recalledMemories, 1);
+    });
+
+    assert.match(inputs[0]!, /Fatos lembrados/);
+    assert.match(inputs[0]!, /sou responsável pelo checkout/);
+  });
+
+  it("com userId e sem fato relacionado, nenhum fato é entregue (cenário 5)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const memoryStore = fakeMemoryStore({ "assunto totalmente diferente": axisVector(0.1, 1), pergunta: queryVector() });
+    await memoryStore.remember("kauane", "assunto totalmente diferente");
+
+    await withServer({ resolveStrategy, memoryStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { userId: "kauane", message: "pergunta" });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.recalledMemories, 0);
+    });
+  });
+
+  it("um fato guardado num pedido é recuperado em outra conversa, e sem conversationId (cenário 3)", async () => {
+    const inputs: string[] = [];
+    const strategy = fakeStrategy("react", async (input, options) => {
+      inputs.push(input);
+      // Executes remember_fact if offered — simulates the agent calling it.
+      const rememberTool = options?.extraTools?.find((t) => (t as { name: string }).name === "remember_fact");
+      if (rememberTool) {
+        await (rememberTool as unknown as { invoke(args: unknown): Promise<string> }).invoke({
+          fact: "sou responsável pelo checkout",
+        });
+      }
+      return fixedResult();
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const memoryStore = fakeMemoryStore({
+      "lembra que eu sou responsável pelo checkout": queryVector(),
+      "sou responsável pelo checkout": queryVector(),
+      "quais serviços são meus?": queryVector(),
+    });
+
+    await withServer({ resolveStrategy, memoryStore }, async (baseUrl) => {
+      // 1st request: agent calls remember_fact.
+      await postChat(baseUrl, { userId: "kauane", message: "lembra que eu sou responsável pelo checkout" });
+
+      // 2nd request: different conversationId (new conversation), same userId.
+      const res = await postChat(baseUrl, { userId: "kauane", message: "quais serviços são meus?" });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.recalledMemories, 1);
+    });
+  });
+
+  it("guardar o mesmo fato com outras palavras não duplica (cenário 6, FR-010 via ferramenta)", async () => {
+    const strategy = fakeStrategy("react", async (_input, options) => {
+      const rememberTool = options?.extraTools?.find((t) => (t as { name: string }).name === "remember_fact");
+      const outcome = await (rememberTool as unknown as { invoke(args: unknown): Promise<string> }).invoke({
+        fact: "eu cuido do checkout",
+      });
+      return fixedResult({ answer: outcome });
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const memoryStore = fakeMemoryStore({
+      "sou responsável pelo checkout": queryVector(),
+      "eu cuido do checkout": axisVector(0.95, 1), // duplicate: score > 0.92 with the existing fact
+      "lembra disso": queryVector(),
+    });
+    await memoryStore.remember("kauane", "sou responsável pelo checkout");
+
+    await withServer({ resolveStrategy, memoryStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { userId: "kauane", message: "lembra disso" });
+      const body = await jsonOf(res);
+      assert.match(body.answer, /"created":false/);
+    });
+
+    assert.equal((await memoryStore.recall("kauane", "sou responsável pelo checkout")).length, 1);
+  });
+});
+
+// --- 008-semantic-memory: User Story 2 --------------------------------------
+
+describe("POST /chat — memória semântica (008, US2 — esquecer)", () => {
+  it("forget_fact apaga um fato do próprio usuário; o recall seguinte não o traz mais", async () => {
+    const memoryStore = fakeMemoryStore({
+      "sou responsável pelo checkout": queryVector(),
+      "esquece isso": queryVector(),
+      "quais serviços são meus?": queryVector(),
+    });
+    const { memoryId } = await memoryStore.remember("kauane", "sou responsável pelo checkout");
+
+    const strategy = fakeStrategy("react", async (_input, options) => {
+      const forgetTool = options?.extraTools?.find((t) => (t as { name: string }).name === "forget_fact");
+      if (forgetTool) {
+        await (forgetTool as unknown as { invoke(args: unknown): Promise<string> }).invoke({ memoryId });
+      }
+      return fixedResult();
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy, memoryStore }, async (baseUrl) => {
+      await postChat(baseUrl, { userId: "kauane", message: "esquece isso" });
+    });
+
+    assert.equal((await memoryStore.recall("kauane", "quais serviços são meus?")).length, 0);
+  });
+});
+
+// --- 008-semantic-memory: User Story 3 --------------------------------------
+
+describe("POST /chat — memória semântica (008, US3 — isolamento e compatibilidade)", () => {
+  it("fato do usuário A não chega em pedido do usuário B (cenário 1)", async () => {
+    const inputs: string[] = [];
+    const strategy = fakeStrategy("react", async (input) => {
+      inputs.push(input);
+      return fixedResult();
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const memoryStore = fakeMemoryStore({
+      "fato de A": queryVector(),
+      "algo relacionado": queryVector(),
+    });
+    await memoryStore.remember("user-a", "fato de A");
+
+    await withServer({ resolveStrategy, memoryStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { userId: "user-b", message: "algo relacionado" });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.recalledMemories, 0);
+    });
+    assert.ok(!inputs[0]!.includes("fato de A"));
+  });
+
+  it("sem userId, nenhuma chamada ao MemoryStore acontece, e a resposta não tem recalledMemories (cenário 2)", async () => {
+    let memoryStoreTouched = false;
+    const spyMemoryStore: MemoryStore = {
+      async remember() {
+        memoryStoreTouched = true;
+        throw new Error("não deveria ser chamado");
+      },
+      async recall() {
+        memoryStoreTouched = true;
+        return [];
+      },
+      forget() {
+        memoryStoreTouched = true;
+        return false;
+      },
+    };
+    const strategy = fakeStrategy("react", async (input, options) => {
+      assert.equal(input, "oi");
+      assert.ok(!options?.extraTools || options.extraTools.length === 0);
+      return fixedResult();
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy, memoryStore: spyMemoryStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      const body = await jsonOf(res);
+      assert.equal("recalledMemories" in body.metrics, false);
+    });
+    assert.equal(memoryStoreTouched, false);
+  });
+
+  it("userId vazio ou só com espaços responde 400 invalid_body, sem chamar a estratégia (cenário 3)", async () => {
+    let strategyCalled = false;
+    const strategy = fakeStrategy("react", async () => {
+      strategyCalled = true;
+      return fixedResult();
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi", userId: "   " });
+      assert.equal(res.status, 400);
+      const json = await jsonOf(res);
+      assert.equal(json.error.code, "invalid_body");
+    });
+    assert.equal(strategyCalled, false);
+  });
+
+  it("falha do MemoryStore em recall não derruba o pedido: 200 com recalledMemories: 0 (FR-025)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const failingMemoryStore: MemoryStore = {
+      async remember() {
+        throw new Error("não deveria ser chamado neste teste");
+      },
+      async recall() {
+        throw new Error("modelo indisponível");
+      },
+      forget() {
+        return false;
+      },
+    };
+
+    await withServer({ resolveStrategy, memoryStore: failingMemoryStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { userId: "kauane", message: "oi" });
+      assert.equal(res.status, 200);
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.recalledMemories, 0);
     });
   });
 });

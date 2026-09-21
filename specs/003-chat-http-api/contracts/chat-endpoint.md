@@ -7,6 +7,11 @@
 > resposta 404 `conversation_not_found` foi adicionada. Ver
 > [`specs/007-persistent-conversation/contracts/chat-endpoint.md`](../../007-persistent-conversation/contracts/chat-endpoint.md)
 > para os acréscimos; tudo o que está registrado abaixo continua valendo.
+>
+> **Emendado também por `008-semantic-memory`**: o corpo ganhou `userId` opcional, a
+> resposta ganhou `metrics.recalledMemories` quando `userId` é informado, e o agente
+> passa a dispor das ferramentas `remember_fact`/`forget_fact` nesse caso. Ver
+> [`specs/008-semantic-memory/contracts/chat-endpoint.md`](../../008-semantic-memory/contracts/chat-endpoint.md).
 
 O único endpoint da feature. Recebe um pedido em linguagem natural, executa uma estratégia
 de raciocínio e devolve o resultado da execução.

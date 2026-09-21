@@ -41,11 +41,13 @@ export type Critic = (context: CritiqueContext, callbacks: BaseCallbackHandler[]
  * (FR-008, R-004). `input` is always the ORIGINAL request — as passed into
  * this reflection cycle — never the feedback-enriched one used to
  * regenerate; the critic judges against what the person actually asked
- * for. When `withConversationHistory` wraps this strategy from the
- * outside (007-persistent-conversation, R-008), that "original request"
- * already includes the conversation's history text, which is what lets
- * the critic correctly judge a context-dependent follow-up instead of
- * rejecting it for lacking a referent.
+ * for. When `withConversationHistory` (007-persistent-conversation, R-008)
+ * or `withMemory` (008-semantic-memory, R-012) wrap this strategy from the
+ * outside, that "original request" already includes the conversation's
+ * history text and/or the recalled facts, which is what lets the critic
+ * correctly judge a context-dependent follow-up — or an answer that
+ * relies on a remembered fact — instead of rejecting it for lacking a
+ * referent it was never shown.
  */
 export function buildCritiqueContext(input: string, result: StrategyResult): CritiqueContext {
   const observations: CritiqueContext["observations"] = [];

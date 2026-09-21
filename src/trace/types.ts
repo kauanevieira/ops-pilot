@@ -16,6 +16,12 @@ export interface RunMetrics {
    * (react, plan-and-execute, reflection, arena, bench, MCP) is unaffected.
    */
   historyMessages?: number;
+  /**
+   * 008-semantic-memory: semantic memories recalled and delivered to the
+   * strategy for this run (0..RECALL_LIMIT). Optional and additive — only
+   * `withMemory` sets it; every other producer is unaffected.
+   */
+  recalledMemories?: number;
 }
 
 /**
