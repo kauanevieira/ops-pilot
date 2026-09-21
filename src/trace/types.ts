@@ -9,6 +9,13 @@ export type TraceEvent =
 export interface RunMetrics {
   llmCalls: number;
   latencyMs: number;
+  /**
+   * 007-persistent-conversation: messages of conversation history actually
+   * delivered to the strategy for this run (0..HISTORY_WINDOW). Optional and
+   * additive — only `withConversationHistory` sets it; every other producer
+   * (react, plan-and-execute, reflection, arena, bench, MCP) is unaffected.
+   */
+  historyMessages?: number;
 }
 
 /**

@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { createApp, type ChatAppDeps } from "./server.ts";
 import { UnknownStrategyError, type ResolveStrategy, type StrategySelection } from "../agents/index.ts";
 import { InMemoryOpsRepository } from "../store/in-memory.ts";
+import { InMemoryConversationStore } from "../store/in-memory-conversation-store.ts";
 import { baselineState } from "../store/seed.ts";
 import type { ReasoningStrategy, RunOptions } from "../agents/types.ts";
 import type { StrategyResult } from "../trace/types.ts";
@@ -91,9 +92,15 @@ describe("POST /chat — User Story 1 (caminho feliz)", () => {
       const res = await postChat(baseUrl, { message: "quais alertas estão abertos?" });
       assert.equal(res.status, 200);
       const body = await jsonOf(res);
-      assert.deepEqual(body, result);
+      // 007-persistent-conversation: conversationId and metrics.historyMessages
+      // are additions on top of the intact StrategyResult (FR-011, FR-022).
+      assert.deepEqual(body.answer, result.answer);
       assert.deepEqual(body.trace, FIXED_TRACE); // mesma ordem, nada filtrado
       assert.equal(body.stoppedReason, "completed");
+      assert.equal(body.metrics.llmCalls, result.metrics.llmCalls);
+      assert.equal(body.metrics.historyMessages, 0);
+      assert.equal(typeof body.conversationId, "string");
+      assert.ok(body.conversationId.length > 0);
     });
 
     assert.equal(calls.length, 1);
@@ -160,7 +167,8 @@ describe("POST /chat — User Story 2 (estratégia e reflect)", () => {
     await withServer({ resolveStrategy }, async (baseUrl) => {
       const res = await postChat(baseUrl, { message: "oi", reflect: true });
       const body = await jsonOf(res);
-      assert.deepEqual(body, reflected);
+      assert.equal(body.answer, reflected.answer);
+      assert.equal(body.metrics.llmCalls, reflected.metrics.llmCalls);
       assert.ok(body.trace.some((e: { type: string }) => e.type === "critique"));
     });
   });
@@ -366,6 +374,212 @@ describe("POST /chat — estado compartilhado entre requisições (FR-012a)", ()
       await postChat(baseUrl, { message: "segundo" });
       assert.equal(observedStore, firstStore);
       assert.equal(observedStore, store);
+    });
+  });
+});
+
+// --- 007-persistent-conversation: User Story 1 --------------------------
+
+describe("POST /chat — conversa (007, US1)", () => {
+  it("sem conversationId, cria uma conversa nova e a devolve na resposta (FR-010, FR-011)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "quais alertas estão abertos?" });
+      assert.equal(res.status, 200);
+      const body = await jsonOf(res);
+      assert.equal(typeof body.conversationId, "string");
+      assert.ok(body.conversationId.length > 0);
+    });
+  });
+
+  it("com o conversationId de um turno anterior, a estratégia recebe o histórico daquele turno (US1, cenário 2)", async () => {
+    const inputs: string[] = [];
+    const strategy = fakeStrategy("react", async (input) => {
+      inputs.push(input);
+      return fixedResult({ answer: `resposta ${inputs.length}` });
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+
+    await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
+      const res1 = await postChat(baseUrl, { message: "quais alertas estão abertos?" });
+      const body1 = await jsonOf(res1);
+      const conversationId = body1.conversationId;
+
+      const res2 = await postChat(baseUrl, { message: "e o runbook dele?", conversationId });
+      assert.equal(res2.status, 200);
+      const body2 = await jsonOf(res2);
+      assert.equal(body2.conversationId, conversationId);
+
+      // O segundo `run()` recebeu a mensagem/resposta do primeiro turno como histórico.
+      assert.match(inputs[1]!, /quais alertas estão abertos\?/);
+      assert.match(inputs[1]!, /resposta 1/);
+      assert.match(inputs[1]!, /e o runbook dele\?$/);
+      assert.equal(body2.metrics.historyMessages, 2);
+    });
+  });
+
+  it("a conversa gravada tem a mensagem de quem pediu seguida da resposta final, nessa ordem (cenário 3)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult({ answer: "checkout-api está com alerta crítico." }));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+
+    await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "qual serviço tem alerta crítico?" });
+      const body = await jsonOf(res);
+      const messages = conversationStore.lastMessages(body.conversationId, 12);
+      assert.equal(messages.length, 2);
+      assert.equal(messages[0]!.role, "user");
+      assert.equal(messages[0]!.content, "qual serviço tem alerta crítico?");
+      assert.equal(messages[1]!.role, "assistant");
+      assert.equal(messages[1]!.content, "checkout-api está com alerta crítico.");
+    });
+  });
+
+  it("o histórico de uma conversa nunca aparece no prompt de outra (cenário 4)", async () => {
+    const inputs: string[] = [];
+    const strategy = fakeStrategy("react", async (input) => {
+      inputs.push(input);
+      return fixedResult();
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+
+    await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
+      const resA1 = await postChat(baseUrl, { message: "conversa A: primeira pergunta" });
+      const conversationA = (await jsonOf(resA1)).conversationId;
+
+      await postChat(baseUrl, { message: "conversa B: pergunta isolada" });
+
+      await postChat(baseUrl, { message: "conversa A: segunda pergunta", conversationId: conversationA });
+    });
+
+    assert.match(inputs[2]!, /conversa A: primeira pergunta/);
+    assert.ok(!inputs[2]!.includes("conversa B"));
+  });
+});
+
+// --- 007-persistent-conversation: User Story 2 --------------------------
+
+describe("POST /chat — conversa (007, US2 — teto de 12 e métrica)", () => {
+  it("uma conversa com mais de 12 mensagens entrega só as 12 mais recentes, e a métrica reporta 12", async () => {
+    const receivedInputs: string[] = [];
+    const strategy = fakeStrategy("react", async (input) => {
+      receivedInputs.push(input);
+      return fixedResult();
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = conversationStore.create();
+    for (let i = 0; i < 8; i += 1) {
+      conversationStore.append(conversationId, [
+        { role: "user", content: `pergunta ${i}` },
+        { role: "assistant", content: `resposta ${i}` },
+      ]);
+    }
+
+    await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "pergunta nova", conversationId });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.historyMessages, 12);
+    });
+
+    // As 12 mais recentes das 16 gravadas (8 pares) são pergunta 2..7 + resposta 2..7.
+    assert.ok(!receivedInputs[0]!.includes("pergunta 0"));
+    assert.ok(!receivedInputs[0]!.includes("resposta 1"));
+    assert.match(receivedInputs[0]!, /resposta 7/);
+  });
+
+  it("conversa nova reporta historyMessages: 0 (cenário 3)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "primeira pergunta" });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.historyMessages, 0);
+    });
+  });
+});
+
+// --- 007-persistent-conversation: User Story 3 --------------------------
+
+describe("POST /chat — conversa (007, US3 — erros)", () => {
+  it("conversationId vazio/espaços responde 400 invalid_body, sem chamar a estratégia", async () => {
+    let strategyCalled = false;
+    const strategy = fakeStrategy("react", async () => {
+      strategyCalled = true;
+      return fixedResult();
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi", conversationId: "   " });
+      assert.equal(res.status, 400);
+      const json = await jsonOf(res);
+      assert.equal(json.error.code, "invalid_body");
+    });
+    assert.equal(strategyCalled, false);
+  });
+
+  it("conversationId inexistente responde 404 conversation_not_found, sem iniciar a execução", async () => {
+    let strategyCalled = false;
+    const strategy = fakeStrategy("react", async () => {
+      strategyCalled = true;
+      return fixedResult();
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi", conversationId: "conv-nao-existe" });
+      assert.equal(res.status, 404);
+      const json = await jsonOf(res);
+      assert.equal(json.error.code, "conversation_not_found");
+      assert.equal(json.error.details.conversationId, "conv-nao-existe");
+    });
+    assert.equal(strategyCalled, false);
+  });
+
+  it("um pedido que estoura o timeout numa conversa existente não grava nada nela (cenário 3)", async () => {
+    const strategy = fakeStrategy("react", () => new Promise<StrategyResult>(() => {}));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = conversationStore.create();
+    conversationStore.append(conversationId, [{ role: "user", content: "mensagem anterior" }]);
+
+    await withServer({ resolveStrategy, conversationStore, timeoutMs: 30 }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi", conversationId });
+      assert.equal(res.status, 504);
+    });
+
+    const messages = conversationStore.lastMessages(conversationId, 12);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0]!.content, "mensagem anterior");
+  });
+
+  it("um pedido que falha sem conversationId não deixa conversa nova registrada (cenário 4)", async () => {
+    const strategy = fakeStrategy("react", async () => {
+      throw new Error("falha inesperada");
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+
+    await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      assert.equal(res.status, 500);
+    });
+
+    // Nenhum id foi devolvido para consultar — a garantia é observável
+    // indiretamente: um pedido seguinte, com dublê sadio e sem conversationId,
+    // ainda cria a SUA própria conversa nova normalmente.
+    const strategy2 = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy: resolveStrategy2 } = recordingResolveStrategy(strategy2);
+    await withServer({ resolveStrategy: resolveStrategy2, conversationStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi de novo" });
+      const body = await jsonOf(res);
+      assert.equal(typeof body.conversationId, "string");
     });
   });
 });

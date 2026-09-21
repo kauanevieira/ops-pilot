@@ -3,6 +3,7 @@ import { createApp } from "./http/server.ts";
 import { openDatabase } from "./store/db.ts";
 import { seedDatabase } from "./store/sqlite-schema.ts";
 import { SqliteOpsStore } from "./store/sqlite-ops-store.ts";
+import { SqliteConversationStore } from "./store/sqlite-conversation-store.ts";
 import { baselineState } from "./store/seed.ts";
 
 /**
@@ -35,7 +36,12 @@ function main(): void {
   const store = new SqliteOpsStore(db);
   seedDatabase(db, baselineState());
 
-  const app = createApp({ store });
+  // 007-persistent-conversation: conversation history lives in the same
+  // file/connection as operational state (R-014) — its own DDL is applied
+  // by this store's constructor and never touches seedDatabase.
+  const conversationStore = new SqliteConversationStore(db);
+
+  const app = createApp({ store, conversationStore });
 
   app.listen(port, () => {
     console.log(`OpsPilot ouvindo em http://localhost:${port}`);

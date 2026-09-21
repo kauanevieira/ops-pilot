@@ -33,3 +33,19 @@ export class RunbookNotFoundError extends DomainError {
     this.name = "RunbookNotFoundError";
   }
 }
+
+/**
+ * Raised by ConversationStore#append and #lastMessages for an id that
+ * doesn't exist (007-persistent-conversation, R-002): `append` never
+ * creates the conversation implicitly, and the HTTP layer translates this
+ * into 404 conversation_not_found before starting any agent run.
+ */
+export class ConversationNotFoundError extends DomainError {
+  readonly conversationId: string;
+
+  constructor(conversationId: string) {
+    super(`Conversation not found: ${conversationId}`);
+    this.name = "ConversationNotFoundError";
+    this.conversationId = conversationId;
+  }
+}

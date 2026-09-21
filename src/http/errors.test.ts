@@ -21,6 +21,14 @@ describe("toErrorBody", () => {
     assert.equal("details" in toErrorBody("timeout", "x").error, false);
     assert.equal("details" in toErrorBody("internal", "x").error, false);
   });
+
+  it("supports conversation_not_found with the conversationId in details (007-persistent-conversation, FR-013)", () => {
+    const body = toErrorBody("conversation_not_found", "Conversa não encontrada: conv-xyz", {
+      conversationId: "conv-xyz",
+    });
+    assert.equal(body.error.code, "conversation_not_found");
+    assert.deepEqual(body.error.details, { conversationId: "conv-xyz" });
+  });
 });
 
 describe("zodIssuesToDetails", () => {

@@ -1,8 +1,10 @@
 import express, { type Express, type ErrorRequestHandler } from "express";
 import { InMemoryOpsRepository } from "../store/in-memory.ts";
+import { InMemoryConversationStore } from "../store/in-memory-conversation-store.ts";
 import { baselineState } from "../store/seed.ts";
 import { resolveStrategy as defaultResolveStrategy, type ResolveStrategy } from "../agents/index.ts";
 import type { OpsRepository } from "../store/repository.ts";
+import type { ConversationStore } from "../store/conversation-store.ts";
 import { createChatHandler } from "./chat.ts";
 import { toErrorBody } from "./errors.ts";
 
@@ -15,6 +17,8 @@ import { toErrorBody } from "./errors.ts";
 export interface ChatAppDeps {
   /** FR-012a/b/c: one instance, shared by every request handled by this app. */
   store?: OpsRepository;
+  /** 007-persistent-conversation: one instance, shared across requests, like `store`. */
+  conversationStore?: ConversationStore;
   resolveStrategy?: ResolveStrategy;
   /** FR-018: milliseconds before a `/chat` request is aborted. */
   timeoutMs?: number;
@@ -28,13 +32,14 @@ export interface ChatAppDeps {
  */
 export function createApp(deps: ChatAppDeps = {}): Express {
   const store = deps.store ?? new InMemoryOpsRepository(baselineState());
+  const conversationStore = deps.conversationStore ?? new InMemoryConversationStore();
   const resolveStrategy = deps.resolveStrategy ?? defaultResolveStrategy;
   const timeoutMs = deps.timeoutMs ?? 180_000;
 
   const app = express();
   app.use(express.json());
 
-  app.post("/chat", createChatHandler({ store, resolveStrategy, timeoutMs }));
+  app.post("/chat", createChatHandler({ store, conversationStore, resolveStrategy, timeoutMs }));
 
   // Registered after the routes, as Express requires for a 4-arg error
   // handler to be recognized as one.

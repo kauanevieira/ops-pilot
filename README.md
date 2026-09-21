@@ -121,31 +121,61 @@ Corpo aceito (validado com zod):
 | `message` | `string` | sim | — |
 | `strategy` | `"react"` \| `"plan-and-execute"` | não | `"react"` |
 | `reflect` | `boolean` | não | `false` |
+| `conversationId` | `string` | não | — (cria conversa nova) |
 
 `reflect: true` aplica a camada de reflexão sobre a estratégia escolhida —
 equivalente a `reflect:react`/`reflect:plan-and-execute` na arena, mas como
 modificador, não como prefixo de nome.
 
-Resposta de sucesso (200): `{ answer, trace, metrics, stoppedReason }` — o
-mesmo `StrategyResult` que a arena imprime, sem transformação.
+`conversationId` continua uma conversa: as até 12 mensagens mais recentes
+daquela conversa (mensagem de quem pediu + resposta final, alternadas) são
+entregues ao agente antes da mensagem nova. Omitido, uma conversa nova é
+criada — mas só se o pedido concluir com sucesso.
+
+```bash
+# primeiro turno — sem conversationId
+curl -s -X POST http://localhost:3000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "qual serviço tem alerta crítico disparando?"}' | tee /tmp/t1.json | jq '{conversationId, answer}'
+
+# segundo turno — continuação, usando o id devolvido
+ID=$(jq -r .conversationId /tmp/t1.json)
+curl -s -X POST http://localhost:3000/chat \
+  -H 'Content-Type: application/json' \
+  -d "{\"message\": \"e qual é o runbook dele?\", \"conversationId\": \"$ID\"}" | jq '{conversationId, answer}'
+```
+
+Resposta de sucesso (200): `{ answer, trace, metrics, stoppedReason, conversationId }`
+— o `StrategyResult` que a arena imprime, sem transformação, mais o id da
+conversa (o informado, ou o da conversa recém-criada) e, em `metrics`, o
+campo `historyMessages` (`0..12` — mensagens de histórico entregues ao
+agente naquele pedido).
 
 | Status | `error.code` | Quando |
 |---|---|---|
 | 400 | `invalid_body` | corpo malformado — `error.details` lista os campos e o motivo |
 | 422 | `unknown_strategy` | `strategy` não é um nome válido — `error.details.validStrategies` lista os aceitos |
+| 404 | `conversation_not_found` | `conversationId` bem formado, mas nenhuma conversa corresponde a ele |
 | 504 | `timeout` | a execução passou de 180s |
 | 500 | `internal` | falha inesperada; nunca vaza detalhe interno |
+
+Um pedido que não conclui com sucesso (400/404/422/504/500) não grava nada
+na conversa — nem a mensagem, nem uma conversa nova.
 
 O estado operacional (serviços, alertas, incidentes, runbooks) é **compartilhado
 por todas as requisições** do mesmo processo e **persiste em SQLite**
 (`OPSPILOT_DB`, padrão `./data/opspilot.db`) — um incidente aberto num pedido
-continua lá mesmo depois de reiniciar o servidor. A arena e o benchmark
-continuam usando um estado em memória, semeado do zero a cada execução, para
-que comparações entre estratégias sempre partam do mesmo ponto.
+continua lá mesmo depois de reiniciar o servidor. As conversas (`conversationId`
+e suas mensagens) persistem no mesmo arquivo. A arena e o benchmark continuam
+usando um estado em memória, semeado do zero a cada execução, para que
+comparações entre estratégias sempre partam do mesmo ponto — nenhum dos dois
+usa conversa.
 
 Detalhes completos (contratos, decisões técnicas, roteiro de validação) em
-[specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP) e
-[specs/004-sqlite-persistence/](specs/004-sqlite-persistence/) (persistência).
+[specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP),
+[specs/004-sqlite-persistence/](specs/004-sqlite-persistence/) (persistência) e
+[specs/007-persistent-conversation/](specs/007-persistent-conversation/) (conversa
+persistente).
 
 ## Servidor MCP
 
@@ -197,14 +227,16 @@ validação) em [specs/006-mcp-server/](specs/006-mcp-server/).
 src/
 ├── domain/    # esquemas zod e erros de domínio (puro)
 ├── store/     # transições de estado puras + repositórios in-memory e SQLite
-│              # (sqlite-ops-store.ts, sqlite-schema.ts, db.ts)
+│              # (sqlite-ops-store.ts, sqlite-schema.ts, db.ts) e o
+│              # ConversationStore de conversas (in-memory e SQLite)
 ├── trace/     # tipos e formatação do rastro de raciocínio (puro)
 ├── agents/    # tool-definitions.ts: fonte única das 6 ferramentas (list_alerts,
 │              # list_incidents, consultar_runbook, open_incident, resolve_incident,
 │              # check_provider_status) — nome, descrição, esquema e execução;
 │              # tools.ts adapta para LangChain; fábrica do modelo, estratégias
-│              # ReAct e Plan-and-Execute, crítico, reflexão (withReflection) e
-│              # o registry (index.ts)
+│              # ReAct e Plan-and-Execute, crítico, reflexão (withReflection),
+│              # histórico de conversa (withConversationHistory) e o registry
+│              # (index.ts)
 ├── mcp/       # servidor MCP opspilot por stdio: ops-mcp-server.ts (composição
 │              # pura sobre tool-definitions.ts) e server.ts (entrada: env, banco,
 │              # transporte, stderr)
@@ -224,8 +256,10 @@ roteiro de validação — está em
 reflexão), [specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP),
 [specs/004-sqlite-persistence/](specs/004-sqlite-persistence/) (persistência
 em SQLite), [specs/005-provider-status-tool/](specs/005-provider-status-tool/)
-(status de provedores externos) e
-[specs/006-mcp-server/](specs/006-mcp-server/) (servidor MCP).
+(status de provedores externos),
+[specs/006-mcp-server/](specs/006-mcp-server/) (servidor MCP) e
+[specs/007-persistent-conversation/](specs/007-persistent-conversation/) (conversa
+persistente).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 
