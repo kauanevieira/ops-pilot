@@ -2,6 +2,7 @@ import { memoryFactSchema, type RememberResult } from "../domain/schemas.ts";
 import type { Distiller } from "./distiller.ts";
 import { looksLikeSecret } from "./secret-guard.ts";
 import type { MemoryStore } from "./memory-store.ts";
+import { withTimeout } from "../lib/with-timeout.ts";
 
 /** Independent of the request's own 180 s deadline (contracts/learning-reflector.md, R-005). */
 export const LEARNING_TIMEOUT_MS = 30_000;
@@ -20,37 +21,6 @@ export type LearningOutcome =
   | { kind: "failed"; userId: string; stage: "distill" | "remember"; error: unknown };
 
 export type LearningReflector = (userId: string, message: string) => Promise<LearningOutcome>;
-
-/**
- * Builds an `AbortController` that aborts itself after `timeoutMs`, and a
- * promise that races `work(signal)` against that timeout — deliberately
- * NOT `AbortSignal.timeout()`: that built-in creates a timer that node:test
- * (Node 22.22.2, verified) flags as "still pending" and cancels the rest of
- * the test file over, even when the race settles correctly and nothing is
- * actually leaked. A plain `setTimeout`, cleared in every branch, doesn't
- * trip that detector. A distiller that ignores its `signal` argument still
- * cannot hold up the reflector past `timeoutMs` (R-005, L5), because this
- * function's own promise settles on the timeout regardless.
- */
-function withTimeout<T>(timeoutMs: number, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
-  const controller = new AbortController();
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      controller.abort();
-      reject(new Error("Tempo limite do refletor de aprendizado excedido."));
-    }, timeoutMs);
-    work(controller.signal).then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-}
 
 /**
  * Builds the learning reflector (contracts/learning-reflector.md): examines
@@ -80,7 +50,9 @@ export function createLearningReflector(deps: {
     // request's 180 s deadline (R-005).
     let decision;
     try {
-      decision = await withTimeout(timeoutMs, (signal) => distiller(message, signal));
+      decision = await withTimeout(timeoutMs, (signal) => distiller(message, signal), {
+        timeoutMessage: "Tempo limite do refletor de aprendizado excedido.",
+      });
     } catch (error) {
       return { kind: "failed", userId, stage: "distill", error };
     }
