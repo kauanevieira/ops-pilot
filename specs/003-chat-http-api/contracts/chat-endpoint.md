@@ -2,6 +2,12 @@
 
 **Feature**: `003-chat-http-api` | Satisfies FR-001 a FR-008, FR-013 a FR-021
 
+> **Emendado por `007-persistent-conversation`**: o corpo ganhou `conversationId`
+> opcional, a resposta ganhou `conversationId` e `metrics.historyMessages`, e uma nova
+> resposta 404 `conversation_not_found` foi adicionada. Ver
+> [`specs/007-persistent-conversation/contracts/chat-endpoint.md`](../../007-persistent-conversation/contracts/chat-endpoint.md)
+> para os acréscimos; tudo o que está registrado abaixo continua valendo.
+
 O único endpoint da feature. Recebe um pedido em linguagem natural, executa uma estratégia
 de raciocínio e devolve o resultado da execução.
 

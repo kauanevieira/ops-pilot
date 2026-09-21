@@ -4,7 +4,7 @@ import type { z } from "zod";
  * Machine-readable discriminator for every error `POST /chat` can respond
  * with (FR-016). A client branches on `code`, not on parsing `message`.
  */
-export type ChatErrorCode = "invalid_body" | "unknown_strategy" | "timeout" | "internal";
+export type ChatErrorCode = "invalid_body" | "unknown_strategy" | "conversation_not_found" | "timeout" | "internal";
 
 export interface ValidationIssue {
   path: string;

@@ -50,3 +50,24 @@ export const runbookSchema = z.object({
   steps: z.array(z.string().min(1)).min(1),
 });
 export type Runbook = z.infer<typeof runbookSchema>;
+
+// --- 007-persistent-conversation --------------------------------------------
+
+/** Closed set (FR-003): the database CHECK on messages.role must stay in sync. */
+export const messageRoleSchema = z.enum(["user", "assistant"]);
+export type MessageRole = z.infer<typeof messageRoleSchema>;
+
+export const conversationMessageSchema = z.object({
+  role: messageRoleSchema,
+  content: z.string().min(1),
+  createdAt: z.date(),
+});
+export type ConversationMessage = z.infer<typeof conversationMessageSchema>;
+
+/**
+ * What `ConversationStore.append` accepts (contracts/conversation-store.md):
+ * `createdAt` is assigned by the store, at the boundary (Principle I) — never
+ * supplied by the caller.
+ */
+export const newConversationMessageSchema = conversationMessageSchema.omit({ createdAt: true });
+export type NewConversationMessage = z.infer<typeof newConversationMessageSchema>;
