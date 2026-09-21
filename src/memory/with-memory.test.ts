@@ -170,10 +170,14 @@ describe("composition with withConversationHistory (contracts/chat-endpoint.md o
   it("facts come before history, which comes before the message", async () => {
     const base = fakeStrategy("react", [makeResult("ok")]);
     const withMem = withMemory(base, { memories: memories(["mem-1", "Sou responsável pelo checkout", 0.8]), tools: [] });
-    const withHistoryAndMem = withConversationHistory(withMem, [
-      { role: "user", content: "oi", createdAt: new Date() },
-      { role: "assistant", content: "olá!", createdAt: new Date() },
-    ]);
+    const withHistoryAndMem = withConversationHistory(withMem, {
+      summary: null,
+      summaryCoveredMessages: 0,
+      messages: [
+        { role: "user", content: "oi", createdAt: new Date() },
+        { role: "assistant", content: "olá!", createdAt: new Date() },
+      ],
+    });
 
     await withHistoryAndMem.run("quais serviços são meus?");
 
@@ -187,9 +191,11 @@ describe("composition with withConversationHistory (contracts/chat-endpoint.md o
   it("both metrics survive together", async () => {
     const base = fakeStrategy("react", [makeResult("ok")]);
     const withMem = withMemory(base, { memories: memories(["mem-1", "fato", 0.5]), tools: [] });
-    const withHistoryAndMem = withConversationHistory(withMem, [
-      { role: "user", content: "oi", createdAt: new Date() },
-    ]);
+    const withHistoryAndMem = withConversationHistory(withMem, {
+      summary: null,
+      summaryCoveredMessages: 0,
+      messages: [{ role: "user", content: "oi", createdAt: new Date() }],
+    });
 
     const result = await withHistoryAndMem.run("pergunta");
     assert.equal(result.metrics.recalledMemories, 1);

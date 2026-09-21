@@ -4,7 +4,17 @@ export type TraceEvent =
   | { type: "observation"; content: string; tool?: string; isError?: boolean }
   | { type: "plan"; steps: string[]; revision: number }
   | { type: "critique"; content: string }
-  | { type: "answer"; content: string };
+  | { type: "answer"; content: string }
+  /**
+   * 011-history-summarization: produced only by the `/chat` handler,
+   * outside every decorator — never by a strategy, the arena, the bench, or
+   * the MCP server (contracts/history-summarization.md, T3). Appears at
+   * most once per request, at trace position 0, only when a new summary
+   * was produced AND saved for this request (FR-022). `content` is the new
+   * summary as saved (after capSummary); `absorbedMessages` is how many
+   * pending messages this summarization folded in.
+   */
+  | { type: "summarize"; content: string; absorbedMessages: number };
 
 export interface RunMetrics {
   llmCalls: number;
@@ -42,6 +52,13 @@ export interface RunMetrics {
    * come out lower than the real total.
    */
   contextBreakdown?: ContextBreakdown;
+  /**
+   * 011-history-summarization: messages covered by the summary delivered to
+   * the strategy for this run (0 with no summary). Optional and additive —
+   * only `withConversationHistory` sets it, alongside `historyMessages`
+   * (which continues to count only the verbatim messages).
+   */
+  summaryCoveredMessages?: number;
 }
 
 /**
@@ -56,6 +73,12 @@ export interface RunMetrics {
 export interface ContextBreakdown {
   message: number;
   history: number;
+  /**
+   * 011-history-summarization: estimate of the summary block delivered to
+   * the strategy (see `formatSummaryBlock`); 0 with no summary. `history`
+   * keeps covering only the verbatim messages.
+   */
+  summary: number;
   memories: number;
   total: number;
 }
