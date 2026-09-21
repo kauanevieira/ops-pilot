@@ -2,6 +2,14 @@
 
 **Feature**: `008-semantic-memory` | Satisfaz FR-027 a FR-031
 
+> **Emendado por `009-learning-reflector`**: `remember_fact` foi removida — guardar um
+> fato passou a ser trabalho exclusivo do refletor de aprendizado, nunca mais do
+> agente. `forget_fact` foi renomeada para `forget_preference`, com o mesmo
+> comportamento. Ver
+> [`specs/009-learning-reflector/contracts/memory-tools.md`](../../009-learning-reflector/contracts/memory-tools.md)
+> para o texto atual das ferramentas; o que está registrado abaixo descreve o desenho
+> original da 008 e não reflete mais o código.
+
 `defineMemoryTools(memoryStore, userId)` e o adaptador `createMemoryTools(memoryStore, userId)`
 em `src/memory/memory-tools.ts`. Mesmo formato de definição de `tool-definitions.ts`
 (`name`, `description`, `schema`, `run → ToolOutcome`), mas **fora** de `defineOpsTools`, o

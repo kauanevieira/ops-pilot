@@ -99,3 +99,25 @@ export const recalledMemorySchema = z.object({
   score: z.number().min(-1).max(1),
 });
 export type RecalledMemory = z.infer<typeof recalledMemorySchema>;
+
+// --- 009-learning-reflector ---------------------------------------------------
+
+/**
+ * The distiller's structured output (contracts/learning-reflector.md, D1–D4).
+ * `fact` is always present — required by strict structured output — and is
+ * the empty string when `hasLearning` is false; length/emptiness validation
+ * against `memoryFactSchema` happens afterwards, in the reflector, not here
+ * (R-003): a too-long fact must become "nothing to learn", not a parse
+ * failure from the model call itself.
+ */
+export const learningDecisionSchema = z.object({
+  hasLearning: z
+    .boolean()
+    .describe("true só se a mensagem contém um fato durável sobre a própria pessoa, seguro de guardar"),
+  fact: z
+    .string()
+    .describe(
+      "o fato em uma frase curta e autocontida, em terceira pessoa; string vazia quando hasLearning é false",
+    ),
+});
+export type LearningDecision = z.infer<typeof learningDecisionSchema>;

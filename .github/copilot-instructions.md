@@ -12,6 +12,11 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
 - Express com SQLite como banco (`node:sqlite`, nativo — sem ORM, sem servidor externo)
 - `@huggingface/transformers` para embeddings locais (memória semântica, `src/memory/`) —
   modelo `paraphrase-multilingual-MiniLM-L12-v2`, baixado uma vez para `data/models/`
+- Memória é aprendida automaticamente: depois de cada resposta bem-sucedida com `userId`,
+  um refletor (`src/memory/learning-reflector.ts`) examina só a mensagem crua, distila um
+  fato com `withStructuredOutput` (`src/memory/distiller.ts`) e barra segredos com uma
+  verificação determinística (`src/memory/secret-guard.ts`) antes de guardar. O agente não
+  guarda mais fatos — só `forget_preference` (esquecer) continua como ferramenta.
 
 ## Comandos
 

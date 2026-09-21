@@ -83,24 +83,24 @@ describe("withMemory", () => {
   it("appends its tools to any extraTools already present in options", async () => {
     const base = fakeStrategy("react", [makeResult("ok")]);
     const preexisting = fakeTool("preexisting_tool");
-    const memoryTool = fakeTool("remember_fact");
+    const memoryTool = fakeTool("forget_preference");
     const wrapped = withMemory(base, { memories: [], tools: [memoryTool] });
 
     await wrapped.run("oi", { extraTools: [preexisting] });
 
     const toolNames = base.calls[0]!.options?.extraTools?.map((t) => (t as { name: string }).name);
-    assert.deepEqual(toolNames, ["preexisting_tool", "remember_fact"]);
+    assert.deepEqual(toolNames, ["preexisting_tool", "forget_preference"]);
   });
 
   it("passes its tools through even with no prior extraTools", async () => {
     const base = fakeStrategy("react", [makeResult("ok")]);
-    const memoryTool = fakeTool("remember_fact");
+    const memoryTool = fakeTool("forget_preference");
     const wrapped = withMemory(base, { memories: [], tools: [memoryTool] });
 
     await wrapped.run("oi");
 
     const toolNames = base.calls[0]!.options?.extraTools?.map((t) => (t as { name: string }).name);
-    assert.deepEqual(toolNames, ["remember_fact"]);
+    assert.deepEqual(toolNames, ["forget_preference"]);
   });
 
   it("keeps the base strategy's name and every other metric untouched", async () => {

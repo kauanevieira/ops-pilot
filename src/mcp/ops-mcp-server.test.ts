@@ -353,16 +353,17 @@ describe("createOpsMcpServer — erros (US2)", () => {
   });
 });
 
-// --- 008-semantic-memory, FR-031: memory tools are never exposed over MCP --
+// --- 008/009-semantic-memory, FR-031/FR-019: memory tools are never exposed over MCP --
 
-describe("MCP_TOOL_NAMES never includes a memory tool (FR-031)", () => {
-  it("neither remember_fact nor forget_fact is in the allow-list", () => {
+describe("MCP_TOOL_NAMES never includes a memory tool (FR-031, FR-019)", () => {
+  it("neither forget_preference nor the retired remember_fact/forget_fact are in the allow-list", () => {
     // MCP_TOOL_NAMES is typed as `readonly OpsToolName[]`, derived from
     // `defineOpsTools`'s return type — a memory tool name literally cannot
     // be added to it without a compile error (R-014), since memory tools
     // are defined in a separate module (memory-tools.ts) that
     // `OpsToolName` doesn't know about. This test documents that
     // guarantee at runtime, in case the type-level one is ever weakened.
+    assert.ok(!(MCP_TOOL_NAMES as readonly string[]).includes("forget_preference"));
     assert.ok(!(MCP_TOOL_NAMES as readonly string[]).includes("remember_fact"));
     assert.ok(!(MCP_TOOL_NAMES as readonly string[]).includes("forget_fact"));
   });

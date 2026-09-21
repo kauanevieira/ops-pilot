@@ -16,7 +16,7 @@ export interface RunOptions {
   signal?: AbortSignal;
   /**
    * 008-semantic-memory, R-011: tools added to this run beyond the
-   * strategy's own ops tools — e.g. `remember_fact`/`forget_fact`, scoped to
+   * strategy's own ops tools — e.g. `forget_preference` (009-learning-reflector), scoped to
    * one userId by the HTTP handler. Generic on purpose: neither the
    * strategy nor the registry in agents/index.ts needs to know memory
    * exists. `ClientTool` is exactly the element type `createReactAgent`
