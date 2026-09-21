@@ -2,13 +2,22 @@ import type { ReasoningStrategy } from "./types.ts";
 import { createReactStrategy } from "./react.ts";
 import { createPlanAndExecuteStrategy } from "./plan-and-execute.ts";
 import { withReflection } from "./reflection.ts";
+import { withIncidentConfirmation } from "./incident-confirmation.ts";
 import type { OpsRepository } from "../store/repository.ts";
 
 export { DEFAULT_MAX_ITERATIONS } from "./types.ts";
 
+/**
+ * `withIncidentConfirmation` wraps every base strategy (005-provider-status-tool
+ * amendment to 004's `open_incident` contract, `contracts/ops-tools.md`): a
+ * prompt-only fix for the model's final answer omitting or fabricating the
+ * incident id made things worse in live testing, so the guarantee is
+ * applied here in code instead, underneath `reflect:*` — the critic then
+ * judges the already-corrected answer, not a possibly-fabricated one.
+ */
 const BASE_FACTORIES: Record<string, (store: OpsRepository) => ReasoningStrategy> = {
-  react: createReactStrategy,
-  "plan-and-execute": createPlanAndExecuteStrategy,
+  react: (store) => withIncidentConfirmation(createReactStrategy(store)),
+  "plan-and-execute": (store) => withIncidentConfirmation(createPlanAndExecuteStrategy(store)),
 };
 
 /**

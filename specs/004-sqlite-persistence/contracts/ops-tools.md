@@ -123,6 +123,28 @@ palavra a trocar, se for o caso.
 > e abrir um incidente que ninguém pediu é trabalho que alguém vai ter que resolver depois.
 > Um pedido por si só não é motivo para abrir; o pedido precisa dizer para abrir. Devolve o
 > incidente criado, com o id gerado e status "open".
+>
+> ⚠️ **Emenda 005-provider-status-tool** (achado em uso real, não em teste — o Princípio V
+> proíbe testes que chamem o modelo, então esta classe de bug é invisível à suíte por
+> construção): a observação da ferramenta já devolve o incidente inteiro em JSON, mas a
+> *síntese em linguagem natural* — o texto final que a pessoa lê — é decisão do modelo a
+> cada execução, não um eco garantido. Duas correções foram tentadas, nesta ordem:
+>
+> 1. **Reforçar a descrição** ("sempre inclua id, título, serviço, severidade e status").
+>    **Piorou o problema**: em três execuções reais, duas produziram um id plausível mas
+>    **fabricado** (separador errado, um deles um padrão repetido de placeholder) em vez do
+>    id real. Pedir a um modelo probabilístico para "sempre incluir X" não o impede de
+>    inventar X quando ele não está de fato lendo a saída da ferramenta — só aumenta a
+>    pressão para produzir *algo* com a forma certa. **Revertida.**
+> 2. **Confirmação determinística fora do modelo**
+>    (`src/agents/incident-confirmation.ts`, `withIncidentConfirmation`): depois de cada
+>    `run()`, o próprio código relê as observações reais de `open_incident` no rastro e, se
+>    a resposta final do modelo não citar o id verdadeiro **literalmente**, substitui a
+>    resposta inteira por um bloco montado a partir do JSON da ferramenta — nunca por texto
+>    gerado pelo modelo. Substituição, não acréscimo: um id certo ao lado de um errado não dá
+>    para quem está de plantão nenhuma forma de saber qual confiar. Aplicado no nível dos
+>    `BASE_FACTORIES` (`src/agents/index.ts`), antes de um eventual `withReflection`, para que
+>    o crítico julgue a resposta já corrigida.
 
 | Campo | Tipo | Obrigatório | `.describe()` |
 |---|---|---|---|
