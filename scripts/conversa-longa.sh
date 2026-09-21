@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# 010-context-measurement (US3, contracts/conversa-longa.md): conduz uma
+# 010-context-measurement (US3, contracts/conversa-longa.md), emendado por
+# 011-history-summarization (contracts/conversa-longa.md): conduz uma
 # conversa fixa de vários turnos contra o /chat local e imprime, por
-# turno, o promptTokens real e a decomposição estimada. Precisa do
-# servidor no ar com credenciais reais (npm run dev); não faz parte de
-# `npm test`.
+# turno, o promptTokens real e a decomposição estimada, incluindo a fonte
+# `summary` e se o turno provocou uma sumarização. Precisa do servidor no
+# ar com credenciais reais (npm run dev); não faz parte de `npm test`.
 #
 # Uso:
 #   ./scripts/conversa-longa.sh
@@ -23,9 +24,11 @@ done
 
 # 16 mensagens fixas de plantão, em ordem. As últimas dependem do
 # histórico ("e o runbook dele?", "e o segundo?") para que a conversa
-# faça sentido além de só encher a janela — 6 turnos (12 mensagens)
-# bastam para atingir HISTORY_WINDOW (007), então o roteiro segue além
-# disso de propósito (FR-020, SC-004).
+# faça sentido além de só encher a janela. Com a janela de 8 e o resumo
+# cumulativo (011), 4 turnos (8 mensagens) já bastam para atingir
+# HISTORY_WINDOW (007), e o roteiro segue além disso de propósito
+# (FR-020, SC-004 da 010): 16 turnos gravam 32 mensagens, o suficiente
+# para duas sumarizações (nos turnos 9 e 13, S4/S6 de contracts/conversa-longa.md).
 MESSAGES=(
   "quais alertas críticos estão abertos?"
   "e o runbook do serviço do primeiro alerta?"
@@ -46,7 +49,8 @@ MESSAGES=(
 )
 
 echo "conversa em ${BASE_URL} (${#MESSAGES[@]} turnos)"
-printf '%-5s %12s %9s %8s %9s %8s %9s\n' "turno" "promptTokens" "llmCalls" "est.msg" "est.hist" "est.mem" "est.total"
+printf '%-5s %12s %9s %8s %9s %8s %8s %9s %8s\n' \
+  "turno" "promptTokens" "llmCalls" "est.msg" "est.hist" "est.sum" "est.mem" "est.total" "resumo"
 
 conversation_id=""
 turn=0
@@ -75,8 +79,13 @@ for message in "${MESSAGES[@]}"; do
   llm_calls=$(echo "$response" | jq -r '.metrics.llmCalls')
   est_msg=$(echo "$response" | jq -r '.metrics.contextBreakdown.message')
   est_hist=$(echo "$response" | jq -r '.metrics.contextBreakdown.history')
+  est_sum=$(echo "$response" | jq -r '.metrics.contextBreakdown.summary')
   est_mem=$(echo "$response" | jq -r '.metrics.contextBreakdown.memories')
   est_total=$(echo "$response" | jq -r '.metrics.contextBreakdown.total')
+  # 011-history-summarization: presente só quando este turno provocou uma
+  # sumarização (o evento summarize aparece em trace[0]) — vazio nos demais.
+  resumo=$(echo "$response" | jq -r '[.trace[]? | select(.type == "summarize") | .absorbedMessages] | first // "" | if . == "" then "" else "+" + (tostring) end')
 
-  printf '%-5d %12s %9s %8s %9s %8s %9s\n' "$turn" "$prompt_tokens" "$llm_calls" "$est_msg" "$est_hist" "$est_mem" "$est_total"
+  printf '%-5d %12s %9s %8s %9s %8s %8s %9s %8s\n' \
+    "$turn" "$prompt_tokens" "$llm_calls" "$est_msg" "$est_hist" "$est_sum" "$est_mem" "$est_total" "$resumo"
 done

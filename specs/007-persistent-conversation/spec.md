@@ -102,7 +102,7 @@ Quem integra com a API distingue, pela resposta, entre ter informado um identifi
 #### Histórico no prompt
 
 - **FR-017**: Antes de executar a estratégia, o sistema MUST obter as até 12 mensagens mais recentes da conversa e entregá-las à estratégia como histórico, em ordem cronológica, antes da mensagem nova.
-- **FR-018**: O teto de 12 mensagens MUST ser um valor único e nomeado, aplicado a qualquer estratégia e a qualquer combinação com reflexão.
+- **FR-018**: O teto de 12 mensagens MUST ser um valor único e nomeado, aplicado a qualquer estratégia e a qualquer combinação com reflexão. Janela reduzida para 8 por `011-history-summarization` (FR-001 daquela spec), que resume o que sai dela em vez de descartar — ver [`specs/011-history-summarization/spec.md`](../011-history-summarization/spec.md).
 - **FR-019**: A inclusão do histórico MUST ser feita por composição sobre a estratégia resolvida — um envoltório aplicável a qualquer estratégia — sem alterar a implementação de cada estratégia e sem exigir que o registro de estratégias conheça conversas.
 - **FR-020**: Com a reflexão ligada, o histórico MUST ser entregue uma única vez por pedido, e o conteúdo gravado como mensagem de quem pediu MUST ser a mensagem original, nunca o texto enriquecido com histórico ou com feedback de revisão.
 - **FR-021**: O histórico MUST conter apenas mensagens de quem pediu e respostas finais do agente; rastros, ações e observações de turnos anteriores MUST NOT ser incluídos.
