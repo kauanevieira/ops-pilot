@@ -131,7 +131,7 @@ function unwrap(field: z.ZodTypeAny): z.ZodTypeAny {
   return field;
 }
 
-describe("as 5 ferramentas — auditoria das 6 regras (Princípio IV)", () => {
+describe("as 6 ferramentas — auditoria das 6 regras (Princípio IV)", () => {
   const store = seededStore();
   const tools = asTestableTools(createOpsTools(store));
 
@@ -177,14 +177,98 @@ describe("as 5 ferramentas — auditoria das 6 regras (Princípio IV)", () => {
     }
   });
 
-  it("todas as cinco ferramentas estão presentes", () => {
+  it("todas as seis ferramentas estão presentes", () => {
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
+      "check_provider_status",
       "consultar_runbook",
       "list_alerts",
       "list_incidents",
       "open_incident",
       "resolve_incident",
     ].sort());
+  });
+});
+
+// --- 005-provider-status-tool: check_provider_status pela ferramenta -------
+
+describe("check_provider_status", () => {
+  it("default é 'github' quando o campo é omitido (FR-003) — verificado pela URL chamada", async () => {
+    const store = seededStore();
+    const seen: string[] = [];
+    const fetchImpl = async (url: string | Request | URL) => {
+      seen.push(String(url));
+      return new Response(JSON.stringify({ status: { indicator: "none", description: "ok" } }));
+    };
+    const tools = asTestableTools(createOpsTools(store, { fetchImpl }));
+    const tool = findTool(tools, "check_provider_status");
+    await tool.invoke({});
+    assert.deepEqual(seen, ["https://www.githubstatus.com/api/v2/status.json"]);
+  });
+
+  it("provedor fora do enum é rejeitado ANTES do corpo da ferramenta, sem nenhuma chamada externa (FR-004, R-006)", async () => {
+    // ⚠️ `assert.rejects`, não `assert.match` contra um retorno em string:
+    // a validação de esquema do LangChain LANÇA antes do corpo da
+    // ferramenta rodar (verificado em research.md R-006) — é o ToolNode do
+    // LangGraph, com `handleToolErrors: true` por padrão, quem converte
+    // isso em observação para o agente, não o nosso `try/catch`. Um teste
+    // que espere retorno aqui fica vermelho, e a correção intuitiva —
+    // trocar `providerSchema` por `z.string()` com validação manual dentro
+    // — é exatamente a violação da Regra 6 do Princípio IV que o enum
+    // existe para impedir. Não "conserte" o enum se este teste falhar.
+    let calls = 0;
+    const store = seededStore();
+    const fetchImpl = async () => {
+      calls++;
+      return new Response(JSON.stringify({ status: { indicator: "none", description: "ok" } }));
+    };
+    const tools = asTestableTools(createOpsTools(store, { fetchImpl }));
+    const tool = findTool(tools, "check_provider_status");
+    await assert.rejects(async () => tool.invoke({ provider: "aws" } as never), (error: Error) => {
+      assert.match(error.message, /github/);
+      assert.match(error.message, /cloudflare/);
+      return true;
+    });
+    assert.equal(calls, 0);
+  });
+
+  it("o retorno é uma linha, ao menos 10x menor que o corpo recebido, sem os campos brutos (FR-025, FR-026, SC-006)", async () => {
+    const store = seededStore();
+    const rawBody = JSON.stringify({
+      page: { id: "kctbh9vrtdwd", name: "GitHub", url: "https://www.githubstatus.com" },
+      status: { indicator: "none", description: "All Systems Operational" },
+      components: Array.from({ length: 20 }, (_, i) => ({ id: `c${i}`, name: `component-${i}`, status: "operational" })),
+    });
+    const fetchImpl = async () => new Response(rawBody);
+    const tools = asTestableTools(createOpsTools(store, { fetchImpl }));
+    const tool = findTool(tools, "check_provider_status");
+    const out = await tool.invoke({});
+    assert.ok(!out.includes("\n"), "o retorno deve caber em uma única linha");
+    assert.ok(out.length * 10 < rawBody.length, `retorno (${out.length}) deveria ser <=10x menor que o corpo (${rawBody.length})`);
+    assert.ok(!out.includes("page"));
+    assert.ok(!out.includes("components"));
+  });
+
+  it("nenhuma falha escapa como exceção do corpo da ferramenta — timeout, rede, 5xx, corpo vazio e erro exótico (FR-015, SC-002)", async () => {
+    const store = seededStore();
+    const fakes: Array<() => Promise<Response>> = [
+      async () => {
+        throw new DOMException("t", "TimeoutError");
+      },
+      async () => {
+        throw new TypeError("fetch failed");
+      },
+      async () => new Response("", { status: 502 }),
+      async () => new Response(""),
+      async () => {
+        throw new Error("algo inesperado");
+      },
+    ];
+    for (const fetchImpl of fakes) {
+      const tools = asTestableTools(createOpsTools(store, { fetchImpl }));
+      const tool = findTool(tools, "check_provider_status");
+      const out = await tool.invoke({});
+      assert.equal(typeof out, "string");
+    }
   });
 });

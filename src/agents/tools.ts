@@ -3,6 +3,7 @@ import { z } from "zod";
 import { DomainError, RunbookNotFoundError, ServiceNotFoundError } from "../domain/errors.ts";
 import { severitySchema } from "../domain/schemas.ts";
 import type { OpsRepository } from "../store/repository.ts";
+import { checkProviderStatus, formatProviderStatus, providerSchema } from "./provider-status.ts";
 
 /**
  * Tools are built from a repository instance rather than a module-level
@@ -13,8 +14,15 @@ import type { OpsRepository } from "../store/repository.ts";
  * IV, contracts/ops-tools.md): (1) what it does, (2) when to use it, (3)
  * when NOT to, (4) what it returns — including the empty case, (5) every
  * field has its own `.describe()`, (6) closed sets are enums.
+ *
+ * `deps.fetchImpl` (005-provider-status-tool, R-007) is the one thing this
+ * factory takes beyond the store — an optional override with a
+ * `globalThis.fetch` default, so tests inject a fake fetch exactly where
+ * they already call this factory, without threading a fetcher through the
+ * strategy chain (`BASE_FACTORIES` → `createStrategy` → `resolveStrategy`),
+ * which is public contract of the 003 HTTP layer.
  */
-export function createOpsTools(store: OpsRepository) {
+export function createOpsTools(store: OpsRepository, deps: { fetchImpl?: typeof fetch } = {}) {
   const listAlerts = tool(
     async ({ status }) => {
       const alerts = status === "all" ? store.listAlerts() : store.listAlerts(status);
@@ -26,7 +34,9 @@ export function createOpsTools(store: OpsRepository) {
         "Lista os alertas emitidos pelo monitoramento. Use quando o pedido for sobre o que está " +
         "disparando agora, o estado dos serviços ou 'como está o plantão'. Não use para incidentes " +
         "registrados por pessoas — alerta é sinal automático do monitoramento, incidente é trabalho " +
-        "aberto por alguém; para esses, use list_incidents. Devolve a lista de alertas com id, serviço, " +
+        "aberto por alguém; para esses, use list_incidents. Também não use para saber se um provedor " +
+        "externo está fora do ar: alerta é o nosso monitoramento sobre os nossos serviços; para o " +
+        "estado de um provedor, use check_provider_status. Devolve a lista de alertas com id, serviço, " +
         "resumo, severidade, status e horário em que disparou, em ordem cronológica; devolve lista " +
         "vazia quando nenhum alerta corresponde ao filtro.",
       schema: z.object({
@@ -180,5 +190,33 @@ export function createOpsTools(store: OpsRepository) {
     },
   );
 
-  return [listAlerts, listIncidents, consultarRunbook, openIncident, resolveIncident];
+  const checkProviderStatusTool = tool(
+    async ({ provider }) => {
+      const result = await checkProviderStatus(provider, { fetchImpl: deps.fetchImpl });
+      return formatProviderStatus(result);
+    },
+    {
+      name: "check_provider_status",
+      description:
+        "Consulta a página pública de status de um provedor externo e diz se ele está operando " +
+        "normalmente. Use quando houver suspeita de que o problema vem de fora — 'é o nosso ou é do " +
+        "provedor?', 'o GitHub está fora?', uma dependência externa que parou de responder, um deploy " +
+        "ou um login que falha sem alerta interno correspondente. Não use para o que o nosso " +
+        "monitoramento está acusando (list_alerts) nem para o que foi registrado pelo plantão " +
+        "(list_incidents): esta ferramenta olha para fora, e o que ela devolve é o que o provedor " +
+        "publica sobre si, não o estado dos nossos serviços. Devolve uma linha com o nível do estado e " +
+        "a descrição publicada pelo provedor; quando o provedor não responde ou responde fora do " +
+        "formato esperado, devolve uma linha dizendo que o status não pôde ser confirmado — que não " +
+        "deve ser lida como 'está tudo bem'.",
+      schema: z.object({
+        provider: providerSchema
+          .default("github")
+          .describe(
+            "Provedor externo cuja página pública de status será consultada: github ou cloudflare. Padrão: github.",
+          ),
+      }),
+    },
+  );
+
+  return [listAlerts, listIncidents, consultarRunbook, openIncident, resolveIncident, checkProviderStatusTool];
 }
