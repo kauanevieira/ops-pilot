@@ -135,23 +135,23 @@ entrada.
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T013 [P] [US2] Em `src/context/tokens.test.ts`, casos de `estimateTokens`: `""` → 0
+- [x] T013 [P] [US2] Em `src/context/tokens.test.ts`, casos de `estimateTokens`: `""` → 0
       (E1); `"a"` e `"abc"` → 1, `"abcde"` → 2 (E2); `"abcd"` → 1 (E3); `"ação"` → 1 (E4,
       4 unidades UTF-16, não 6 bytes); mesma chamada duas vezes com o mesmo texto → igual (E5)
-- [ ] T014 [P] [US2] Em `src/agents/conversation-history.test.ts`: `formatHistoryBlock([])
+- [x] T014 [P] [US2] Em `src/agents/conversation-history.test.ts`: `formatHistoryBlock([])
       === ""`; com histórico, `formatHistoryInput(h, x) === formatHistoryBlock(h) + x` para
       um `x` qualquer; o bloco termina com `"Mensagem atual do plantonista:\n"`. Os testes
       existentes de `formatHistoryInput` ficam sem mudança (B5)
-- [ ] T015 [P] [US2] Em `src/memory/with-memory.test.ts`: `formatMemoriesBlock([]) === ""`;
+- [x] T015 [P] [US2] Em `src/memory/with-memory.test.ts`: `formatMemoriesBlock([]) === ""`;
       com memórias, `formatMemoriesInput(m, x) === formatMemoriesBlock(m) + x`; o bloco
       contém cada `[memoryId]`. Os testes existentes ficam sem mudança (B5)
-- [ ] T016 [P] [US2] Criar `src/context/breakdown.test.ts`: (B1) sem histórico e sem memórias
+- [x] T016 [P] [US2] Criar `src/context/breakdown.test.ts`: (B1) sem histórico e sem memórias
       → `{ message: estimateTokens(msg), history: 0, memories: 0, total: … }`; (B2) e (B3)
       valores iguais a `estimateTokens` do bloco correspondente; `total === message + history
       + memories` (M7); (B4) para um histórico e memórias fixos,
       `formatHistoryInput(h, formatMemoriesInput(m, msg)) === formatHistoryBlock(h) +
       formatMemoriesBlock(m) + msg`
-- [ ] T017 [P] [US2] Em `src/http/server.test.ts`, bloco `describe` novo "010
+- [x] T017 [P] [US2] Em `src/http/server.test.ts`, bloco `describe` novo "010
       contextBreakdown", usando estratégia falsa que grava a `input` recebida: (a) sem
       `conversationId` nem `userId` → `history: 0`, `memories: 0`,
       `message === estimateTokens("<mensagem>")` (US2 cenário 2); (b) segundo turno na mesma
@@ -166,22 +166,22 @@ entrada.
 
 ### Implementation for User Story 2
 
-- [ ] T018 [US2] Em `src/context/tokens.ts`: `export function estimateTokens(text: string):
+- [x] T018 [US2] Em `src/context/tokens.ts`: `export function estimateTokens(text: string):
       number { return Math.ceil(text.length / 4); }`, com comentário explicando por que não
       se usa tokenizer e por que `length` e não bytes (R-006). Faz T013 passar
-- [ ] T019 [P] [US2] Em `src/agents/conversation-history.ts`: extrair `formatHistoryBlock(history):
+- [x] T019 [P] [US2] Em `src/agents/conversation-history.ts`: extrair `formatHistoryBlock(history):
       string`, que devolve `""` sem histórico e, com histórico, o mesmo texto de hoje até
       "Mensagem atual do plantonista:" inclusive, terminado em `"\n"`. `formatHistoryInput`
       passa a ser `formatHistoryBlock(history) + input`. O texto produzido fica byte a byte
       igual. Faz T014 passar
-- [ ] T020 [P] [US2] Em `src/memory/with-memory.ts`: extrair `formatMemoriesBlock(memories)`
+- [x] T020 [P] [US2] Em `src/memory/with-memory.ts`: extrair `formatMemoriesBlock(memories)`
       do mesmo jeito (cabeçalho, fatos com `[memoryId]`, linha vazia, terminado em `"\n"`);
       `formatMemoriesInput` = bloco + input. Faz T015 passar
-- [ ] T021 [US2] Criar `src/context/breakdown.ts`: `buildContextBreakdown({ message, history,
+- [x] T021 [US2] Criar `src/context/breakdown.ts`: `buildContextBreakdown({ message, history,
       memories }: { message: string; history: ConversationMessage[]; memories:
       RecalledMemory[] }): ContextBreakdown`, puro, usando `estimateTokens`,
       `formatHistoryBlock` e `formatMemoriesBlock`. Faz T016 passar
-- [ ] T022 [US2] Em `src/http/chat.ts`, dentro de `runChat()`: declarar `memories` fora do
+- [x] T022 [US2] Em `src/http/chat.ts`, dentro de `runChat()`: declarar `memories` fora do
       `if (userId)` (vazio por padrão), guardar o resultado de `finalStrategy.run(...)` e
       devolver `{ ...result, metrics: { ...result.metrics, contextBreakdown:
       buildContextBreakdown({ message, history, memories }) } }`. Comentário curto: anexado

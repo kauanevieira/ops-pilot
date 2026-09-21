@@ -16,6 +16,17 @@ import { BaseMessage, isAIMessage } from "@langchain/core/messages";
 import type { LLMResult } from "@langchain/core/outputs";
 
 /**
+ * Cheap, local, approximate token estimate for a piece of text (research
+ * R-006): characters divided by 4, rounded up. Pure — no tokenizer, no
+ * model call. `text.length` counts UTF-16 code units, which is what keeps
+ * accented Portuguese text (NFC, the normal form for typed/JSON input)
+ * from inflating the count the way counting UTF-8 bytes would.
+ */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/**
  * Reads the real input-token count the provider reported for a single
  * chat-model call, from `output.generations[0][0].message.usage_metadata`
  * (research R-001). `llmOutput` is intentionally never read: it's specific

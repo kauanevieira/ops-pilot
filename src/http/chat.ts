@@ -12,6 +12,7 @@ import { createMemoryTools } from "../memory/memory-tools.ts";
 import { withMemory } from "../memory/with-memory.ts";
 import type { LearningReflector, LearningOutcome } from "../memory/learning-reflector.ts";
 import { toErrorBody, zodIssuesToDetails } from "./errors.ts";
+import { buildContextBreakdown } from "../context/breakdown.ts";
 import type { StrategyResult } from "../trace/types.ts";
 
 /**
@@ -140,8 +141,12 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
     // decorators' metrics survive withReflection rebuilding `metrics`.
     async function runChat(): Promise<StrategyResult> {
       let strategyToRun: ReasoningStrategy = strategy;
+      // 010-context-measurement: declared here (not inside the `if`) so
+      // the context breakdown below can estimate the memories block for
+      // ANY request — `[]` without a userId is the correct input for
+      // FR-011's "absent source is 0", not a special case.
+      let memories: RecalledMemory[] = [];
       if (userId) {
-        let memories: RecalledMemory[] = [];
         try {
           memories = await memoryStore.recall(userId, message);
         } catch (error) {
@@ -150,10 +155,17 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
         strategyToRun = withMemory(strategyToRun, { memories, tools: createMemoryTools(memoryStore, userId) });
       }
       const finalStrategy = withConversationHistory(strategyToRun, history);
-      return finalStrategy.run(message, {
+      const result = await finalStrategy.run(message, {
         maxIterations: DEFAULT_MAX_ITERATIONS,
         signal: controller.signal,
       });
+
+      // 010-context-measurement, R-008: anchored HERE, outside every
+      // decorator — `withReflection` rebuilds `metrics` from scratch on
+      // every return, so anything attached inside it would be lost. The
+      // estimate uses the same `message`/`history`/`memories` the
+      // decorators above just composed the strategy's input from.
+      return { ...result, metrics: { ...result.metrics, contextBreakdown: buildContextBreakdown({ message, history, memories }) } };
     }
 
     const runPromise = runChat();

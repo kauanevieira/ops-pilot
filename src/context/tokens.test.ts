@@ -2,11 +2,39 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { AIMessage } from "@langchain/core/messages";
 import type { LLMResult } from "@langchain/core/outputs";
-import { inputTokensFromResult, sumPromptTokens } from "./tokens.ts";
+import { estimateTokens, inputTokensFromResult, sumPromptTokens } from "./tokens.ts";
 
 function chatResult(message: unknown): LLMResult {
   return { generations: [[{ text: "", message } as never]] };
 }
+
+describe("estimateTokens", () => {
+  it("is 0 for an empty text (E1)", () => {
+    assert.equal(estimateTokens(""), 0);
+  });
+
+  it("rounds up (E2)", () => {
+    assert.equal(estimateTokens("a"), 1);
+    assert.equal(estimateTokens("abc"), 1);
+    assert.equal(estimateTokens("abcde"), 2);
+  });
+
+  it("is exact on an exact division (E3)", () => {
+    assert.equal(estimateTokens("abcd"), 1);
+  });
+
+  it("counts UTF-16 units, not UTF-8 bytes — accented text does not inflate (E4)", () => {
+    // "ação" is 4 UTF-16 code units (NFC), 6 UTF-8 bytes; the estimate must
+    // follow .length, not Buffer.byteLength.
+    assert.equal(estimateTokens("ação"), 1);
+    assert.equal(Buffer.byteLength("ação", "utf8"), 6);
+  });
+
+  it("is deterministic for the same text (E5)", () => {
+    const text = "quais alertas estão abertos no checkout?";
+    assert.equal(estimateTokens(text), estimateTokens(text));
+  });
+});
 
 describe("inputTokensFromResult", () => {
   it("reads usage_metadata.input_tokens from the first generation's AIMessage (U1)", () => {

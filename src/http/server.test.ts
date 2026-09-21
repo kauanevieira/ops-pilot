@@ -1282,3 +1282,90 @@ describe("POST /chat — medição de contexto (010, US1 — promptTokens)", () 
     });
   });
 });
+
+// --- 010-context-measurement: User Story 2 (contextBreakdown) ---------
+
+describe("POST /chat — medição de contexto (010, US2 — contextBreakdown)", () => {
+  it("sem histórico nem userId, history e memories são 0 e message estima o texto da mensagem (cenário 2)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "quais alertas estão abertos?" });
+      const body = await jsonOf(res);
+      assert.deepEqual(Object.keys(body.metrics.contextBreakdown).sort(), ["history", "memories", "message", "total"]);
+      assert.equal(body.metrics.contextBreakdown.history, 0);
+      assert.equal(body.metrics.contextBreakdown.memories, 0);
+      assert.equal(body.metrics.contextBreakdown.message, Math.ceil("quais alertas estão abertos?".length / 4));
+      assert.equal(body.metrics.contextBreakdown.total, body.metrics.contextBreakdown.message);
+    });
+  });
+
+  it("mensagem com espaços nas pontas estima o texto depois do trim (M6)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "  oi  " });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.contextBreakdown.message, Math.ceil("oi".length / 4));
+    });
+  });
+
+  it("num segundo turno, history estima o bloco de histórico efetivamente entregue (cenário 3, M6)", async () => {
+    const inputs: string[] = [];
+    const strategy = fakeStrategy("react", async (input) => {
+      inputs.push(input);
+      return fixedResult({ answer: `resposta ${inputs.length}` });
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+    const secondMessage = "e o runbook dele?";
+
+    await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
+      const res1 = await postChat(baseUrl, { message: "quais alertas estão abertos?" });
+      const conversationId = (await jsonOf(res1)).conversationId;
+
+      const res2 = await postChat(baseUrl, { message: secondMessage, conversationId });
+      const body2 = await jsonOf(res2);
+
+      // O bloco de histórico é exatamente o que sobra da entrada entregue
+      // depois de remover a mensagem (o bloco de memórias está vazio aqui):
+      // o comprimento do bloco bate com o que gerou a estimativa (M6).
+      const delivered = inputs[1]!;
+      assert.ok(delivered.endsWith(secondMessage));
+      const historyBlock = delivered.slice(0, delivered.length - secondMessage.length);
+      assert.equal(body2.metrics.contextBreakdown.history, Math.ceil(historyBlock.length / 4));
+      assert.ok(body2.metrics.contextBreakdown.history > 0);
+      assert.equal(body2.metrics.contextBreakdown.memories, 0);
+    });
+  });
+
+  it("com userId e memória recuperada, memories estima o bloco de fatos entregue (cenário 4)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const memoryStore = fakeMemoryStore({
+      "sou responsável pelo checkout": queryVector(),
+      "quais serviços são meus?": queryVector(),
+    });
+    await memoryStore.remember("ana", "sou responsável pelo checkout");
+
+    await withServer({ resolveStrategy, memoryStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "quais serviços são meus?", userId: "ana" });
+      const body = await jsonOf(res);
+      assert.ok(body.metrics.contextBreakdown.memories > 0);
+      assert.equal(body.metrics.contextBreakdown.history, 0);
+    });
+  });
+
+  it("todo 200 traz as quatro chaves, mesmo com reflect: true (M5)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const resolveStrategy: ResolveStrategy = () => strategy;
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi", reflect: false });
+      const body = await jsonOf(res);
+      assert.deepEqual(Object.keys(body.metrics.contextBreakdown).sort(), ["history", "memories", "message", "total"]);
+    });
+  });
+});

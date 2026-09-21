@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { formatHistoryInput, withConversationHistory, HISTORY_WINDOW } from "./conversation-history.ts";
+import { formatHistoryBlock, formatHistoryInput, withConversationHistory, HISTORY_WINDOW } from "./conversation-history.ts";
 import { withReflection } from "./reflection.ts";
 import type { Critic } from "./critic.ts";
 import type { ConversationMessage } from "../domain/schemas.ts";
@@ -48,6 +48,23 @@ describe("formatHistoryInput", () => {
     assert.match(composed, /Mensagem atual do plantonista:\ne o runbook dele\?$/);
     // Chronological order preserved: the user line comes before the assistant line.
     assert.ok(composed.indexOf("quais alertas") < composed.indexOf("3 alertas"));
+  });
+});
+
+describe("formatHistoryBlock (010-context-measurement, B4/B5)", () => {
+  it("is empty with no history", () => {
+    assert.equal(formatHistoryBlock([]), "");
+  });
+
+  it("ends with the same 'Mensagem atual do plantonista:' line, terminated by a newline", () => {
+    const h = history(["user", "quais alertas estão abertos?"]);
+    assert.ok(formatHistoryBlock(h).endsWith("Mensagem atual do plantonista:\n"));
+  });
+
+  it("concatenated with any input reproduces formatHistoryInput exactly (B4)", () => {
+    const h = history(["user", "quais alertas estão abertos?"], ["assistant", "3 alertas em checkout-api."]);
+    const input = "e o runbook dele?";
+    assert.equal(formatHistoryBlock(h) + input, formatHistoryInput(h, input));
   });
 });
 

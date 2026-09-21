@@ -11,6 +11,20 @@ export interface WithMemoryOptions {
 }
 
 /**
+ * 010-context-measurement: the exact text `formatMemoriesInput` prefixes
+ * onto `input` — extracted so `src/context/breakdown.ts` can estimate
+ * precisely what this decorator adds (research R-007). `""` with no
+ * memories, same as `formatMemoriesInput`'s early return.
+ */
+export function formatMemoriesBlock(memories: RecalledMemory[]): string {
+  if (memories.length === 0) return "";
+
+  const facts = memories.map((m) => `- [${m.memoryId}] ${m.fact}`).join("\n");
+
+  return ["Fatos lembrados sobre este usuário (do mais relevante para o menos relevante):", facts, ""].join("\n") + "\n";
+}
+
+/**
  * Pure text composition (008-semantic-memory, R-012) — same rationale as
  * `formatHistoryInput` in 007: `run(input: string)` is the only thing every
  * strategy shares, so recalled facts are prefixed as text rather than
@@ -21,16 +35,7 @@ export interface WithMemoryOptions {
  * shown to it here (spec, edge case).
  */
 export function formatMemoriesInput(memories: RecalledMemory[], input: string): string {
-  if (memories.length === 0) return input;
-
-  const facts = memories.map((m) => `- [${m.memoryId}] ${m.fact}`).join("\n");
-
-  return [
-    "Fatos lembrados sobre este usuário (do mais relevante para o menos relevante):",
-    facts,
-    "",
-    input,
-  ].join("\n");
+  return formatMemoriesBlock(memories) + input;
 }
 
 /**
