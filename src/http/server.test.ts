@@ -14,6 +14,8 @@ import type { Distiller } from "../memory/distiller.ts";
 import type { LearningOutcome } from "../memory/learning-reflector.ts";
 import type { LearningDecision } from "../domain/schemas.ts";
 import { DatabaseSync } from "node:sqlite";
+import type { Summarizer, SummarizerInput } from "../context/summarizer.ts";
+import { SqliteConversationStore } from "../store/sqlite-conversation-store.ts";
 
 // --- Test doubles (R-007, FR-022, FR-023) -----------------------------
 //
@@ -108,8 +110,45 @@ function learningProbe(): { onLearning: (outcome: LearningOutcome) => void; next
   return { onLearning: (outcome) => resolveFn(outcome), next };
 }
 
+// --- 011-history-summarization: test doubles for the summarizer seam ---
+//
+// `withServer` defaults `summarizer` to `echoSummarizer` (R-015, same role
+// `noLearningDistiller` plays for 009): a deterministic, offline fake that
+// never reaches `createModelSummarizer()` — the real, credential-requiring
+// default. It still exercises the real `prepareConversationContext` /
+// `withConversationHistory` wiring, just without a model call.
+
+/** Deterministic, offline default for `withServer.summarizer` (R-015). */
+const echoSummarizer: Summarizer = async ({ previousSummary, messages }) =>
+  `resumo(${messages.length} msgs; anterior=${previousSummary ?? "-"})`;
+
+/** A summarizer that records every input it was called with, for merge/cadence assertions. */
+function recordingSummarizer(reply: (input: SummarizerInput, callIndex: number) => string): {
+  summarizer: Summarizer;
+  calls: SummarizerInput[];
+} {
+  const calls: SummarizerInput[] = [];
+  const summarizer: Summarizer = async (input) => {
+    calls.push(input);
+    return reply(input, calls.length - 1);
+  };
+  return { summarizer, calls };
+}
+
+/** A summarizer that always rejects — for fail-open scenarios (SC-006). */
+function rejectingSummarizer(error: unknown = new Error("falha do sumarizador")): Summarizer {
+  return async () => {
+    throw error;
+  };
+}
+
+/** A summarizer that never resolves — for the summarization timeout scenario. */
+function neverResolvingSummarizer(): Summarizer {
+  return () => new Promise<string>(() => {});
+}
+
 async function withServer<T>(deps: ChatAppDeps, fn: (baseUrl: string) => Promise<T>): Promise<T> {
-  const app = createApp({ distiller: noLearningDistiller, onLearning: () => {}, ...deps });
+  const app = createApp({ distiller: noLearningDistiller, onLearning: () => {}, summarizer: echoSummarizer, ...deps });
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const { port } = server.address() as AddressInfo;
@@ -520,8 +559,39 @@ describe("POST /chat — conversa (007, US1)", () => {
 
 // --- 007-persistent-conversation: User Story 2 --------------------------
 
-describe("POST /chat — conversa (007, US2 — teto de 12 e métrica)", () => {
-  it("uma conversa com mais de 12 mensagens entrega só as 12 mais recentes, e a métrica reporta 12", async () => {
+describe("POST /chat — conversa (007, US2 — teto de janela e métrica; janela e comportamento emendados pela 011, FR-001)", () => {
+  it("com poucas mensagens fora da janela (nenhuma sumarização ainda), TODAS são entregues, não só as 8 mais recentes", async () => {
+    // 011-history-summarization (data-model.md, R-016): antes da primeira
+    // sumarização, nada é descartado — só a partir de 8 mensagens pendentes
+    // (16 gravadas) o resumo passa a existir e a janela recente de 8 a
+    // valer como teto. Aqui: 5 turnos = 10 mensagens, 2 pendentes (< 8).
+    const receivedInputs: string[] = [];
+    const strategy = fakeStrategy("react", async (input) => {
+      receivedInputs.push(input);
+      return fixedResult();
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = conversationStore.create();
+    for (let i = 0; i < 5; i += 1) {
+      conversationStore.append(conversationId, [
+        { role: "user", content: `pergunta ${i}` },
+        { role: "assistant", content: `resposta ${i}` },
+      ]);
+    }
+
+    await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "pergunta nova", conversationId });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.historyMessages, 10);
+      assert.equal(body.metrics.summaryCoveredMessages, 0);
+    });
+
+    assert.match(receivedInputs[0]!, /pergunta 0/);
+    assert.match(receivedInputs[0]!, /resposta 4/);
+  });
+
+  it("uma conversa com 16 mensagens gravadas dispara a primeira sumarização: 8 na íntegra, resumo cobrindo 8", async () => {
     const receivedInputs: string[] = [];
     const strategy = fakeStrategy("react", async (input) => {
       receivedInputs.push(input);
@@ -540,16 +610,19 @@ describe("POST /chat — conversa (007, US2 — teto de 12 e métrica)", () => {
     await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
       const res = await postChat(baseUrl, { message: "pergunta nova", conversationId });
       const body = await jsonOf(res);
-      assert.equal(body.metrics.historyMessages, 12);
+      assert.equal(body.metrics.historyMessages, 8);
+      assert.equal(body.metrics.summaryCoveredMessages, 8);
     });
 
-    // As 12 mais recentes das 16 gravadas (8 pares) são pergunta 2..7 + resposta 2..7.
+    // As 8 mais recentes das 16 gravadas (8 pares) são pergunta 4..7 + resposta 4..7;
+    // pergunta 0/resposta 3 e antes ficam só no resumo, não na íntegra.
     assert.ok(!receivedInputs[0]!.includes("pergunta 0"));
-    assert.ok(!receivedInputs[0]!.includes("resposta 1"));
+    assert.ok(!receivedInputs[0]!.includes("resposta 3"));
     assert.match(receivedInputs[0]!, /resposta 7/);
+    assert.match(receivedInputs[0]!, /Resumo da conversa até aqui/);
   });
 
-  it("conversa nova reporta historyMessages: 0 (cenário 3)", async () => {
+  it("conversa nova reporta historyMessages: 0 e summaryCoveredMessages: 0 (cenário 3)", async () => {
     const strategy = fakeStrategy("react", async () => fixedResult());
     const { resolveStrategy } = recordingResolveStrategy(strategy);
 
@@ -557,6 +630,7 @@ describe("POST /chat — conversa (007, US2 — teto de 12 e métrica)", () => {
       const res = await postChat(baseUrl, { message: "primeira pergunta" });
       const body = await jsonOf(res);
       assert.equal(body.metrics.historyMessages, 0);
+      assert.equal(body.metrics.summaryCoveredMessages, 0);
     });
   });
 });
@@ -1293,8 +1367,12 @@ describe("POST /chat — medição de contexto (010, US2 — contextBreakdown)",
     await withServer({ resolveStrategy }, async (baseUrl) => {
       const res = await postChat(baseUrl, { message: "quais alertas estão abertos?" });
       const body = await jsonOf(res);
-      assert.deepEqual(Object.keys(body.metrics.contextBreakdown).sort(), ["history", "memories", "message", "total"]);
+      assert.deepEqual(
+        Object.keys(body.metrics.contextBreakdown).sort(),
+        ["history", "memories", "message", "summary", "total"],
+      );
       assert.equal(body.metrics.contextBreakdown.history, 0);
+      assert.equal(body.metrics.contextBreakdown.summary, 0);
       assert.equal(body.metrics.contextBreakdown.memories, 0);
       assert.equal(body.metrics.contextBreakdown.message, Math.ceil("quais alertas estão abertos?".length / 4));
       assert.equal(body.metrics.contextBreakdown.total, body.metrics.contextBreakdown.message);
@@ -1358,14 +1436,244 @@ describe("POST /chat — medição de contexto (010, US2 — contextBreakdown)",
     });
   });
 
-  it("todo 200 traz as quatro chaves, mesmo com reflect: true (M5)", async () => {
+  it("todo 200 traz as cinco chaves (SM4, emenda 011), mesmo com reflect: true (M5)", async () => {
     const strategy = fakeStrategy("react", async () => fixedResult());
     const resolveStrategy: ResolveStrategy = () => strategy;
 
     await withServer({ resolveStrategy }, async (baseUrl) => {
       const res = await postChat(baseUrl, { message: "oi", reflect: false });
       const body = await jsonOf(res);
-      assert.deepEqual(Object.keys(body.metrics.contextBreakdown).sort(), ["history", "memories", "message", "total"]);
+      assert.deepEqual(
+        Object.keys(body.metrics.contextBreakdown).sort(),
+        ["history", "memories", "message", "summary", "total"],
+      );
+    });
+  });
+});
+
+// --- 011-history-summarization: User Story 1 -------------------------------
+
+describe("POST /chat — resumo (011, US1)", () => {
+  it("o resumo entra no bloco 'Resumo da conversa até aqui', antes do histórico recente, sem 'pergunta 0'", async () => {
+    const receivedInputs: string[] = [];
+    const strategy = fakeStrategy("react", async (input) => {
+      receivedInputs.push(input);
+      return fixedResult();
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = conversationStore.create();
+    for (let i = 0; i < 8; i += 1) {
+      conversationStore.append(conversationId, [
+        { role: "user", content: `pergunta ${i}` },
+        { role: "assistant", content: `resposta ${i}` },
+      ]);
+    }
+
+    await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "pergunta nova", conversationId });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.historyMessages, 8);
+      assert.equal(body.metrics.summaryCoveredMessages, 8);
+      assert.ok(body.metrics.contextBreakdown.summary > 0);
+      assert.equal(
+        body.metrics.contextBreakdown.total,
+        body.metrics.contextBreakdown.message +
+          body.metrics.contextBreakdown.history +
+          body.metrics.contextBreakdown.summary +
+          body.metrics.contextBreakdown.memories,
+      );
+    });
+
+    const delivered = receivedInputs[0]!;
+    assert.match(delivered, /Resumo da conversa até aqui/);
+    const summaryIndex = delivered.indexOf("Resumo da conversa até aqui");
+    const historyIndex = delivered.indexOf("Histórico recente");
+    assert.ok(summaryIndex >= 0 && historyIndex > summaryIndex);
+    assert.ok(!delivered.includes("pergunta 0"));
+
+    assert.equal(conversationStore.getSummary(conversationId)?.coveredMessages, 8);
+  });
+
+  it("persiste entre instâncias: um novo SqliteConversationStore sobre o mesmo banco reutiliza o resumo, sem chamar o sumarizador de novo", async () => {
+    const db = new DatabaseSync(":memory:");
+    const conversationStore1 = new SqliteConversationStore(db);
+    const conversationId = conversationStore1.create();
+    for (let i = 0; i < 8; i += 1) {
+      conversationStore1.append(conversationId, [
+        { role: "user", content: `pergunta ${i}` },
+        { role: "assistant", content: `resposta ${i}` },
+      ]);
+    }
+
+    const strategy1 = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy: resolveStrategy1 } = recordingResolveStrategy(strategy1);
+    let firstSummary: string | undefined;
+    await withServer({ resolveStrategy: resolveStrategy1, conversationStore: conversationStore1 }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "pergunta nova", conversationId });
+      const body = await jsonOf(res);
+      firstSummary = body.metrics.contextBreakdown.summary > 0 ? conversationStore1.getSummary(conversationId)?.content : undefined;
+      assert.equal(body.metrics.summaryCoveredMessages, 8);
+    });
+    assert.ok(firstSummary);
+
+    // A NEW store instance over the SAME connection — simulates reopening the database.
+    const conversationStore2 = new SqliteConversationStore(db);
+    let summarizerCalledAgain = false;
+    const guardSummarizer: Summarizer = async (input) => {
+      summarizerCalledAgain = true;
+      return `não deveria ser chamado(${input.messages.length})`;
+    };
+    const strategy2 = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy: resolveStrategy2 } = recordingResolveStrategy(strategy2);
+
+    await withServer(
+      { resolveStrategy: resolveStrategy2, conversationStore: conversationStore2, summarizer: guardSummarizer },
+      async (baseUrl) => {
+        const res = await postChat(baseUrl, { message: "outra pergunta", conversationId });
+        const body = await jsonOf(res);
+        assert.equal(body.metrics.summaryCoveredMessages, 8);
+      },
+    );
+
+    assert.equal(summarizerCalledAgain, false);
+    assert.equal(conversationStore2.getSummary(conversationId)?.content, firstSummary);
+  });
+
+  it("falha do sumarizador: 200, summaryCoveredMessages: 0, até 15 mensagens na íntegra (SC-006)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = conversationStore.create();
+    for (let i = 0; i < 8; i += 1) {
+      conversationStore.append(conversationId, [
+        { role: "user", content: `pergunta ${i}` },
+        { role: "assistant", content: `resposta ${i}` },
+      ]);
+    }
+    const summarizer: Summarizer = async () => {
+      throw new Error("sumarizador indisponível");
+    };
+
+    await withServer({ resolveStrategy, conversationStore, summarizer }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "pergunta nova", conversationId });
+      assert.equal(res.status, 200);
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.summaryCoveredMessages, 0);
+      assert.equal(body.metrics.historyMessages, 15);
+    });
+    assert.equal(conversationStore.getSummary(conversationId), null);
+  });
+
+  it("sem conversationId, summaryCoveredMessages e contextBreakdown.summary são 0 (SM6)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "primeira pergunta" });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.summaryCoveredMessages, 0);
+      assert.equal(body.metrics.contextBreakdown.summary, 0);
+    });
+  });
+});
+
+// --- 011-history-summarization: User Story 2 -------------------------------
+
+describe("POST /chat — resumo cumulativo (011, US2)", () => {
+  it("ao longo de 20 turnos HTTP, o sumarizador é chamado 3 vezes (turnos 9, 13, 17), sempre recebendo o resumo anterior", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const calls: SummarizerInput[] = [];
+    const summarizer: Summarizer = async (input) => {
+      calls.push(input);
+      return `resumo#${calls.length}`;
+    };
+
+    await withServer({ resolveStrategy, summarizer }, async (baseUrl) => {
+      let conversationId: string | undefined;
+      for (let turn = 1; turn <= 20; turn += 1) {
+        const res = await postChat(baseUrl, { message: `mensagem turno ${turn}`, conversationId });
+        const body = await jsonOf(res);
+        conversationId = body.conversationId;
+
+        if ([9, 13, 17].includes(turn)) {
+          assert.equal(body.metrics.summaryCoveredMessages, (turn === 9 ? 1 : turn === 13 ? 2 : 3) * 8);
+        } else {
+          const expectedCovered = turn < 9 ? 0 : turn < 13 ? 8 : turn < 17 ? 16 : 24;
+          assert.equal(body.metrics.summaryCoveredMessages, expectedCovered);
+        }
+      }
+    });
+
+    assert.equal(calls.length, 3);
+    assert.equal(calls[0]!.previousSummary, null);
+    assert.equal(calls[1]!.previousSummary, "resumo#1");
+    assert.equal(calls[2]!.previousSummary, "resumo#2");
+    for (const call of calls) assert.equal(call.messages.length, 8);
+  });
+});
+
+// --- 011-history-summarization: User Story 3 -------------------------------
+
+describe("POST /chat — evento summarize (011, US3)", () => {
+  it("o pedido que resume traz trace[0] com o evento summarize; o seguinte não traz nenhum (SM1)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = conversationStore.create();
+    for (let i = 0; i < 8; i += 1) {
+      conversationStore.append(conversationId, [
+        { role: "user", content: `pergunta ${i}` },
+        { role: "assistant", content: `resposta ${i}` },
+      ]);
+    }
+
+    await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
+      const res1 = await postChat(baseUrl, { message: "pergunta que resume", conversationId });
+      const body1 = await jsonOf(res1);
+      assert.equal(body1.trace[0].type, "summarize");
+      assert.equal(body1.trace[0].absorbedMessages, 8);
+      assert.equal(body1.trace.length, FIXED_TRACE.length + 1);
+      assert.deepEqual(body1.trace.slice(1), FIXED_TRACE);
+      assert.equal(body1.trace.filter((e: { type: string }) => e.type === "summarize").length, 1);
+
+      const res2 = await postChat(baseUrl, { message: "pergunta seguinte", conversationId });
+      const body2 = await jsonOf(res2);
+      assert.ok(!body2.trace.some((e: { type: string }) => e.type === "summarize"));
+    });
+  });
+
+  it("sem resumo (conversa sem conversationId), nenhum evento summarize aparece", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      const body = await jsonOf(res);
+      assert.ok(!body.trace.some((e: { type: string }) => e.type === "summarize"));
+    });
+  });
+
+  it("SM2: falha do sumarizador nunca produz o evento, e o rastro fica igual ao FIXED_TRACE", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = conversationStore.create();
+    for (let i = 0; i < 8; i += 1) {
+      conversationStore.append(conversationId, [
+        { role: "user", content: `pergunta ${i}` },
+        { role: "assistant", content: `resposta ${i}` },
+      ]);
+    }
+    const summarizer: Summarizer = async () => {
+      throw new Error("indisponível");
+    };
+
+    await withServer({ resolveStrategy, conversationStore, summarizer }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "pergunta nova", conversationId });
+      const body = await jsonOf(res);
+      assert.deepEqual(body.trace, FIXED_TRACE);
     });
   });
 });

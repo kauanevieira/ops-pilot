@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { messageRoleSchema } from "../domain/schemas.ts";
+import { messageRoleSchema, SUMMARY_MAX_CHARS } from "../domain/schemas.ts";
 import { runConversationStoreContract } from "./conversation-store.contract.ts";
 import { SqliteConversationStore } from "./sqlite-conversation-store.ts";
 
@@ -97,6 +97,59 @@ describe("persistência entre aberturas de conexão (FR-007)", () => {
     assert.deepEqual(
       store.lastMessages(id, 12).map((m) => m.content),
       ["oi"],
+    );
+  });
+
+  // --- 011-history-summarization: CV19 ---------------------------------
+
+  it("CV19: um resumo gravado é lido de volta por uma conexão nova sobre o mesmo banco", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "opspilot-conv-summary-test-"));
+    const dbPath = path.join(dir, "test.db");
+    try {
+      const db1 = new DatabaseSync(dbPath);
+      const store1 = new SqliteConversationStore(db1);
+      const id = store1.create();
+      store1.saveSummary(id, { content: "resumo persistido", coveredMessages: 8 });
+      db1.close();
+
+      const db2 = new DatabaseSync(dbPath);
+      const store2 = new SqliteConversationStore(db2);
+      const reread = store2.getSummary(id);
+      assert.equal(reread?.content, "resumo persistido");
+      assert.equal(reread?.coveredMessages, 8);
+      db2.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// --- 011-history-summarization: sincronia CHECK <-> SUMMARY_MAX_CHARS -------
+
+describe("sincronia entre CHECK do banco e SUMMARY_MAX_CHARS", () => {
+  it("conversation_summaries.content bate com SUMMARY_MAX_CHARS", () => {
+    const db = new DatabaseSync(":memory:");
+    new SqliteConversationStore(db);
+    const row = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_summaries'")
+      .get() as { sql: string };
+    const match = /CHECK \(length\(content\) BETWEEN 1 AND (\d+)\)/.exec(row.sql);
+    assert.ok(match, "CHECK não encontrado para conversation_summaries.content");
+    assert.equal(Number(match![1]), SUMMARY_MAX_CHARS);
+  });
+
+  it("o CHECK rejeita conteúdo acima do teto mesmo inserido diretamente", () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new SqliteConversationStore(db);
+    const id = store.create();
+    assert.throws(
+      () =>
+        db
+          .prepare(
+            "INSERT INTO conversation_summaries (conversation_id, content, covered_messages, updated_at) VALUES (?,?,?,?)",
+          )
+          .run(id, "x".repeat(SUMMARY_MAX_CHARS + 1), 8, new Date().toISOString()),
+      /CHECK constraint failed/,
     );
   });
 });

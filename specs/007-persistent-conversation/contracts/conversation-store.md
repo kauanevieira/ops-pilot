@@ -2,6 +2,11 @@
 
 **Feature**: `007-persistent-conversation` | Satisfaz FR-001 a FR-008, FR-024, FR-025
 
+> **Emendado por `011-history-summarization`**: a interface ganha `countMessages`,
+> `messagesRange`, `getSummary` e `saveSummary` — leitura por posição e o resumo
+> cumulativo de cada conversa. `create`, `append` e `lastMessages` não mudam. Ver
+> [`specs/011-history-summarization/contracts/conversation-store.md`](../../011-history-summarization/contracts/conversation-store.md).
+
 Contrato novo, separado de `OpsRepository` (R-001). **Síncrono**, como `OpsRepository`.
 
 ---

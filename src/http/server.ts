@@ -13,6 +13,9 @@ import type { Distiller } from "../memory/distiller.ts";
 import { createModelDistiller } from "../memory/distiller.ts";
 import type { LearningOutcome } from "../memory/learning-reflector.ts";
 import { createLearningReflector, logLearningOutcome, LEARNING_TIMEOUT_MS } from "../memory/learning-reflector.ts";
+import type { Summarizer } from "../context/summarizer.ts";
+import { createModelSummarizer } from "../context/summarizer.ts";
+import { SUMMARY_TIMEOUT_MS } from "../context/conversation-context.ts";
 import { createChatHandler } from "./chat.ts";
 import { toErrorBody } from "./errors.ts";
 
@@ -50,6 +53,15 @@ export interface ChatAppDeps {
   resolveStrategy?: ResolveStrategy;
   /** FR-018: milliseconds before a `/chat` request is aborted. */
   timeoutMs?: number;
+  /**
+   * 011-history-summarization: folds what falls out of the recent history
+   * window into a durable, cumulative summary. The default,
+   * `createModelSummarizer()`, is only ever CONSTRUCTED here — building it
+   * reads no environment variable, same pattern as `distiller` above.
+   */
+  summarizer?: Summarizer;
+  /** 011-history-summarization, FR-010: independent of `timeoutMs` — default `SUMMARY_TIMEOUT_MS` (30s). */
+  summaryTimeoutMs?: number;
 }
 
 /**
@@ -67,6 +79,8 @@ export function createApp(deps: ChatAppDeps = {}): Express {
   const onLearning = deps.onLearning ?? logLearningOutcome;
   const resolveStrategy = deps.resolveStrategy ?? defaultResolveStrategy;
   const timeoutMs = deps.timeoutMs ?? 180_000;
+  const summarizer = deps.summarizer ?? createModelSummarizer();
+  const summaryTimeoutMs = deps.summaryTimeoutMs ?? SUMMARY_TIMEOUT_MS;
 
   const learn = createLearningReflector({ memoryStore, distiller, timeoutMs: learningTimeoutMs });
 
@@ -75,7 +89,17 @@ export function createApp(deps: ChatAppDeps = {}): Express {
 
   app.post(
     "/chat",
-    createChatHandler({ store, conversationStore, memoryStore, learn, onLearning, resolveStrategy, timeoutMs }),
+    createChatHandler({
+      store,
+      conversationStore,
+      memoryStore,
+      learn,
+      onLearning,
+      resolveStrategy,
+      timeoutMs,
+      summarizer,
+      summaryTimeoutMs,
+    }),
   );
 
   // Registered after the routes, as Express requires for a 4-arg error

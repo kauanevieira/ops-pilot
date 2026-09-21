@@ -37,6 +37,13 @@ describe("formatTrace", () => {
     const trace: TraceEvent[] = [{ type: "answer", content: "ok" }];
     assert.equal(formatTrace(trace), formatTrace(trace));
   });
+
+  // --- 011-history-summarization: T2 ------------------------------------
+
+  it("renders a summarize event with its own label and the absorbed count", () => {
+    const trace: TraceEvent[] = [{ type: "summarize", content: "R", absorbedMessages: 8 }];
+    assert.equal(formatTrace(trace), "[summarize]   (+8 mensagens) R");
+  });
 });
 
 describe("formatMetrics", () => {

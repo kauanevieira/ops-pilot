@@ -25,6 +25,13 @@
 > ausente se o provedor não reportar) e `contextBreakdown` (estimativa por fonte:
 > mensagem, histórico, memórias, total). Ver
 > [`specs/010-context-measurement/contracts/chat-endpoint.md`](../../010-context-measurement/contracts/chat-endpoint.md).
+>
+> **Emendado também por `011-history-summarization`**: a janela de histórico (007)
+> passa de 12 para 8 mensagens; o que sai dela vira um resumo cumulativo, entregue
+> ao agente e persistido por conversa. `trace` pode começar com um evento
+> `summarize`; `metrics` ganha `summaryCoveredMessages` e `contextBreakdown` ganha a
+> fonte `summary`. Corpo da requisição não muda. Ver
+> [`specs/011-history-summarization/contracts/chat-endpoint.md`](../../011-history-summarization/contracts/chat-endpoint.md).
 
 O único endpoint da feature. Recebe um pedido em linguagem natural, executa uma estratégia
 de raciocínio e devolve o resultado da execução.

@@ -2,6 +2,11 @@
 
 **Feature**: `010-context-measurement` | Satisfaz FR-005 a FR-017
 
+> **Emendado por `011-history-summarization`**: `contextBreakdown` (M5/M7 abaixo) ganha
+> uma quinta chave, `summary` — `total` passa a somar quatro estimativas, não três.
+> `history` continua cobrindo só as mensagens entregues na íntegra. Ver
+> [`specs/011-history-summarization/contracts/chat-endpoint.md`](../../011-history-summarization/contracts/chat-endpoint.md).
+
 Emenda [`003-chat-http-api/contracts/chat-endpoint.md`](../../003-chat-http-api/contracts/chat-endpoint.md),
 já emendado pela 007, 008 e 009. **Corpo da requisição e corpos de erro não mudam.** No 200,
 `metrics` ganha dois campos opcionais.

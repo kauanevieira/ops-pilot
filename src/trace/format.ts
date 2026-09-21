@@ -14,6 +14,8 @@ function formatEvent(event: TraceEvent): string {
       return `[critique]    ${event.content}`;
     case "answer":
       return `[answer]      ${event.content}`;
+    case "summarize":
+      return `[summarize]   (+${event.absorbedMessages} mensagens) ${event.content}`;
   }
 }
 

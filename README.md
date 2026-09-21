@@ -134,10 +134,22 @@ Corpo aceito (validado com zod):
 equivalente a `reflect:react`/`reflect:plan-and-execute` na arena, mas como
 modificador, não como prefixo de nome.
 
-`conversationId` continua uma conversa: as até 12 mensagens mais recentes
+`conversationId` continua uma conversa: as até 8 mensagens mais recentes
 daquela conversa (mensagem de quem pediu + resposta final, alternadas) são
-entregues ao agente antes da mensagem nova. Omitido, uma conversa nova é
-criada — mas só se o pedido concluir com sucesso.
+entregues ao agente na íntegra, antes da mensagem nova. Omitido, uma conversa
+nova é criada — mas só se o pedido concluir com sucesso.
+
+O que sai dessa janela não é descartado: a cada 8 mensagens que saem dela, um
+**resumo cumulativo** é produzido — mesclando o que já estava resumido com as
+mensagens recém-saídas — e passa a entrar no contexto do agente, antes do
+histórico recente. O resumo é refeito só quando 8 mensagens novas se
+acumulam fora da janela, nunca a cada pedido: entre uma rodada e a próxima, o
+resumo gravado é só lido de volta. Fica persistido por conversa (sobrevive a
+reinício do servidor) e tem um teto de tamanho — o pedido que o produz traz,
+no `trace`, um evento `summarize` com o texto novo e quantas mensagens ele
+absorveu. Uma falha ao resumir (provedor indisponível, tempo esgotado) nunca
+derruba o pedido: a conversa segue com o resumo anterior (se houver) e até 15
+mensagens na íntegra, e o erro é só registrado no servidor.
 
 `userId` liga a memória semântica: com ele, os até 3 fatos mais relevantes
 guardados por aquele usuário (por sentido, não por palavra) entram no que o
@@ -183,11 +195,15 @@ curl -s -X POST http://localhost:3000/chat \
 ```
 
 Resposta de sucesso (200): `{ answer, trace, metrics, stoppedReason, conversationId }`
-— o `StrategyResult` que a arena imprime, sem transformação, mais o id da
-conversa (o informado, ou o da conversa recém-criada) e, em `metrics`, o
-campo `historyMessages` (`0..12` — mensagens de histórico entregues ao
-agente naquele pedido). Com `userId`, `metrics` também traz
-`recalledMemories` (`0..3`); sem `userId`, o campo não aparece.
+— o `StrategyResult` que a arena imprime, mais o id da conversa (o
+informado, ou o da conversa recém-criada). Quando o pedido provoca uma
+sumarização, `trace` começa com um evento `{ type: "summarize", content,
+absorbedMessages }`, antes dos eventos da estratégia — ausente em todo
+pedido que não resume. Em `metrics`, os campos `historyMessages` (`0..15` —
+mensagens de histórico entregues ao agente na íntegra naquele pedido) e
+`summaryCoveredMessages` (`0` sem resumo, ou quantas mensagens o resumo
+entregue cobre). Com `userId`, `metrics` também traz `recalledMemories`
+(`0..3`); sem `userId`, o campo não aparece.
 
 `metrics` também traz dois campos sobre o contexto enviado ao modelo, um real
 e um estimado — nunca reconciliados entre si:
@@ -195,27 +211,30 @@ e um estimado — nunca reconciliados entre si:
 - **`promptTokens`** — real, reportado pelo provedor: soma dos tokens de
   entrada de toda chamada ao modelo feita naquele pedido (a estratégia base,
   cada tentativa de reflexão, o crítico). Ausente se alguma dessas chamadas
-  não reportou consumo — nunca uma soma parcial apresentada como total.
+  não reportou consumo — nunca uma soma parcial apresentada como total. A
+  chamada que produz o resumo da conversa nunca entra nessa soma.
 - **`contextBreakdown`** — estimado (caracteres ÷ 4), sempre presente: quanto
-  do contexto veio da mensagem, do histórico e das memórias recuperadas, e o
-  total dessas três estimativas. Fica, de propósito, bem menor que
-  `promptTokens`: não cobre as instruções da estratégia, os esquemas das
-  ferramentas nem o rastro que cresce a cada iteração do agente — só o que o
-  handler do `/chat` de fato compõe.
+  do contexto veio da mensagem, do histórico, do resumo e das memórias
+  recuperadas, e o total dessas quatro estimativas. Fica, de propósito, bem
+  menor que `promptTokens`: não cobre as instruções da estratégia, os
+  esquemas das ferramentas nem o rastro que cresce a cada iteração do agente
+  — só o que o handler do `/chat` de fato compõe.
 
 ```bash
 curl -s -X POST http://localhost:3000/chat \
   -H 'Content-Type: application/json' \
   -d '{"message": "quais alertas críticos estão abertos?"}' \
-  | jq '.metrics | {promptTokens, contextBreakdown}'
+  | jq '.metrics | {promptTokens, contextBreakdown, summaryCoveredMessages}'
 ```
 
-Para ver os dois números crescerem ao longo de uma conversa, até a janela de
-histórico estabilizar: `./scripts/conversa-longa.sh` (com o servidor no ar,
-`npm run dev`) conduz 16 turnos numa única conversa e imprime, por turno,
-`promptTokens` e `contextBreakdown` — `n/d` na coluna de `promptTokens`
-quando o provedor não reportou. Endereço configurável por `OPSPILOT_URL`
-(padrão `http://localhost:3000`); precisa de `curl` e `jq`.
+Para ver os números crescerem ao longo de uma conversa, e o resumo entrar em
+cena quando a janela enche: `./scripts/conversa-longa.sh` (com o servidor no
+ar, `npm run dev`) conduz 16 turnos numa única conversa e imprime, por turno,
+`promptTokens`, a decomposição do contexto (incluindo `est.sum`, a fonte do
+resumo) e uma coluna `resumo` marcando com `+N` os turnos em que uma
+sumarização aconteceu — `n/d` na coluna de `promptTokens` quando o provedor
+não reportou. Endereço configurável por `OPSPILOT_URL` (padrão
+`http://localhost:3000`); precisa de `curl` e `jq`.
 
 | Status | `error.code` | Quando |
 |---|---|---|
@@ -237,10 +256,11 @@ O estado operacional (serviços, alertas, incidentes, runbooks) é **compartilha
 por todas as requisições** do mesmo processo e **persiste em SQLite**
 (`OPSPILOT_DB`, padrão `./data/opspilot.db`) — um incidente aberto num pedido
 continua lá mesmo depois de reiniciar o servidor. As conversas (`conversationId`
-e suas mensagens) e as memórias semânticas (por `userId`) persistem no mesmo
-arquivo. A arena e o benchmark continuam usando um estado em memória, semeado
-do zero a cada execução, para que comparações entre estratégias sempre partam
-do mesmo ponto — nenhum dos dois usa conversa ou memória.
+e suas mensagens), os resumos cumulativos de cada conversa e as memórias
+semânticas (por `userId`) persistem no mesmo arquivo. A arena e o benchmark
+continuam usando um estado em memória, semeado do zero a cada execução, para
+que comparações entre estratégias sempre partam do mesmo ponto — nenhum dos
+dois usa conversa, resumo ou memória.
 
 ### Memória semântica: custo em disco
 
@@ -317,12 +337,18 @@ src/
 ├── domain/    # esquemas zod e erros de domínio (puro)
 ├── store/     # transições de estado puras + repositórios in-memory e SQLite
 │              # (sqlite-ops-store.ts, sqlite-schema.ts, db.ts) e o
-│              # ConversationStore de conversas (in-memory e SQLite)
+│              # ConversationStore de conversas e resumos (in-memory e SQLite)
+├── lib/       # utilitários sem domínio: with-timeout.ts (raça contra prazo +
+│              # AbortSignal, compartilhado pelo refletor de aprendizado e
+│              # pelo sumarizador de histórico)
 ├── trace/     # tipos e formatação do rastro de raciocínio (puro)
-├── context/   # medição de contexto (puro): estimateTokens (caracteres÷4),
-│              # inputTokensFromResult/sumPromptTokens (tokens reais do
-│              # usage_metadata do provedor), buildContextBreakdown
-│              # (estimativa por fonte: mensagem, histórico, memórias)
+├── context/   # medição e composição de contexto (puro): estimateTokens
+│              # (caracteres÷4), inputTokensFromResult/sumPromptTokens
+│              # (tokens reais do usage_metadata do provedor),
+│              # buildContextBreakdown (estimativa por fonte: mensagem,
+│              # histórico, resumo, memórias); summarizer.ts (prompt e
+│              # chamada do sumarizador de histórico) e
+│              # conversation-context.ts (quando resumir e o que entregar)
 ├── agents/    # tool-definitions.ts: fonte única das 6 ferramentas (list_alerts,
 │              # list_incidents, consultar_runbook, open_incident, resolve_incident,
 │              # check_provider_status) — nome, descrição, esquema e execução;
