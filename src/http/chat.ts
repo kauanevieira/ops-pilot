@@ -3,8 +3,13 @@ import type { RequestHandler } from "express";
 import type { OpsRepository } from "../store/repository.ts";
 import type { ConversationStore } from "../store/conversation-store.ts";
 import { DEFAULT_MAX_ITERATIONS, UnknownStrategyError, type ResolveStrategy } from "../agents/index.ts";
+import type { ReasoningStrategy } from "../agents/types.ts";
 import { HISTORY_WINDOW, withConversationHistory } from "../agents/conversation-history.ts";
 import { ConversationNotFoundError } from "../domain/errors.ts";
+import { userIdSchema, type ConversationMessage, type RecalledMemory } from "../domain/schemas.ts";
+import type { MemoryStore } from "../memory/memory-store.ts";
+import { createMemoryTools } from "../memory/memory-tools.ts";
+import { withMemory } from "../memory/with-memory.ts";
 import { toErrorBody, zodIssuesToDetails } from "./errors.ts";
 import type { StrategyResult } from "../trace/types.ts";
 
@@ -25,6 +30,8 @@ export const chatRequestSchema = z.object({
   strategy: z.string().trim().min(1, "strategy não pode ser vazia.").optional(),
   reflect: z.boolean().optional().default(false),
   conversationId: z.string().trim().min(1, "conversationId não pode ser vazio.").optional(),
+  /** 008-semantic-memory, FR-019/FR-020: empty/whitespace-only is 400, same rule as the fields above. */
+  userId: userIdSchema.optional(),
 });
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
@@ -36,6 +43,8 @@ export interface CreateChatHandlerOptions {
   store: OpsRepository;
   /** 007-persistent-conversation: durable/fake conversation history store. */
   conversationStore: ConversationStore;
+  /** 008-semantic-memory: durable/fake semantic memory store. */
+  memoryStore: MemoryStore;
   resolveStrategy: ResolveStrategy;
   /** FR-018: 180_000 in production; injected short in tests (FR-025). */
   timeoutMs: number;
@@ -49,7 +58,7 @@ export interface CreateChatHandlerOptions {
  * 200. Nothing past a failed step runs.
  */
 export function createChatHandler(options: CreateChatHandlerOptions): RequestHandler {
-  const { store, conversationStore, resolveStrategy, timeoutMs } = options;
+  const { store, conversationStore, memoryStore, resolveStrategy, timeoutMs } = options;
 
   return (req, res, next) => {
     const parsed = chatRequestSchema.safeParse(req.body);
@@ -60,7 +69,14 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
       return;
     }
 
-    let strategy;
+    // Destructured once, right after a successful parse: `parsed.data`
+    // itself doesn't narrow into the nested `runChat` closure below (TS
+    // loses the `parsed.success` discriminant across a function
+    // boundary), but these primitive/string values, once assigned, need
+    // no further narrowing.
+    const { message, conversationId, userId } = parsed.data;
+
+    let strategy: ReasoningStrategy;
     try {
       strategy = resolveStrategy({ name: parsed.data.strategy, reflect: parsed.data.reflect }, store);
     } catch (error) {
@@ -78,8 +94,7 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
     // BEFORE any execution starts. Absent `conversationId`, history is
     // empty and a conversation is only created after success (R-006,
     // FR-015) — a failed request must not leave a conversation behind.
-    const { conversationId } = parsed.data;
-    let history;
+    let history: ConversationMessage[];
     try {
       history = conversationId ? conversationStore.lastMessages(conversationId, HISTORY_WINDOW) : [];
     } catch (error) {
@@ -93,23 +108,44 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
       return;
     }
 
-    // R-008: the history decorator is the OUTERMOST layer — applied here,
-    // over whatever resolveStrategy returned (including withReflection) —
-    // so `metrics.historyMessages` survives withReflection rebuilding
-    // `metrics` from scratch, and the critic judges the history-enriched
-    // input rather than a context-free follow-up.
-    const strategyWithHistory = withConversationHistory(strategy, history);
-
     // R-006: cancellation AND an independent clock, not just one of the
     // two. `signal` reaches the strategy so a run that outlives the
     // deadline actually stops touching the shared store (FR-020); the race
     // against `timeoutMs` is what guarantees the client gets a response in
     // time even if some path along the way ignored the signal.
     const controller = new AbortController();
-    const runPromise = strategyWithHistory.run(parsed.data.message, {
-      maxIterations: DEFAULT_MAX_ITERATIONS,
-      signal: controller.signal,
-    });
+
+    // 008-semantic-memory, R-013: with a userId, recall happens HERE —
+    // inside the promise that races the deadline, and only the raw message
+    // (never the history-enriched text) is used as the query. A recall
+    // failure is fail-open (FR-025): logged, treated as zero memories, and
+    // the request proceeds — losing memory degrades the answer, it doesn't
+    // corrupt it, unlike a failure inside the strategy's own tool calls.
+    //
+    // Composition (R-012, matching 007's R-008): withMemory wraps the base
+    // `strategy` (which may already be withReflection-wrapped by
+    // resolveStrategy) BEFORE withConversationHistory wraps everything —
+    // so the final text is facts, then history, then the message, and both
+    // decorators' metrics survive withReflection rebuilding `metrics`.
+    async function runChat(): Promise<StrategyResult> {
+      let strategyToRun: ReasoningStrategy = strategy;
+      if (userId) {
+        let memories: RecalledMemory[] = [];
+        try {
+          memories = await memoryStore.recall(userId, message);
+        } catch (error) {
+          console.error("Falha ao recuperar memória semântica:", error);
+        }
+        strategyToRun = withMemory(strategyToRun, { memories, tools: createMemoryTools(memoryStore, userId) });
+      }
+      const finalStrategy = withConversationHistory(strategyToRun, history);
+      return finalStrategy.run(message, {
+        maxIterations: DEFAULT_MAX_ITERATIONS,
+        signal: controller.signal,
+      });
+    }
+
+    const runPromise = runChat();
     // The losing side of the race below must never become an unhandled
     // rejection: an aborted run typically rejects once the timeout wins,
     // and nothing else will ever look at that rejection.
@@ -142,7 +178,7 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
         const { result } = outcome;
         const resolvedConversationId = conversationId ?? conversationStore.create();
         conversationStore.append(resolvedConversationId, [
-          { role: "user", content: parsed.data.message },
+          { role: "user", content: message },
           { role: "assistant", content: result.answer },
         ]);
 

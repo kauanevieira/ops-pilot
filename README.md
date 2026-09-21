@@ -76,6 +76,12 @@ npm run bench -- --scenario c2
 # revisá-lo a cada passo, sem a chamada extra de modelo por revisão
 npm run bench -- --no-replanner
 
+# Baixa o modelo de embeddings da memória semântica para data/models/ (requer
+# rede, roda uma vez). Sem isso, o teste de recall com o modelo real aparece
+# como "skipped" em vez de "pass" — e o primeiro pedido com userId é que paga
+# o download.
+npm run memory:model
+
 # Portões de qualidade — offline, sem credenciais
 npm run typecheck
 npm test
@@ -122,6 +128,7 @@ Corpo aceito (validado com zod):
 | `strategy` | `"react"` \| `"plan-and-execute"` | não | `"react"` |
 | `reflect` | `boolean` | não | `false` |
 | `conversationId` | `string` | não | — (cria conversa nova) |
+| `userId` | `string` | não | — (sem memória) |
 
 `reflect: true` aplica a camada de reflexão sobre a estratégia escolhida —
 equivalente a `reflect:react`/`reflect:plan-and-execute` na arena, mas como
@@ -131,6 +138,26 @@ modificador, não como prefixo de nome.
 daquela conversa (mensagem de quem pediu + resposta final, alternadas) são
 entregues ao agente antes da mensagem nova. Omitido, uma conversa nova é
 criada — mas só se o pedido concluir com sucesso.
+
+`userId` liga a memória semântica: com ele, os até 3 fatos mais relevantes
+guardados por aquele usuário (por sentido, não por palavra) entram no que o
+agente recebe, e o agente ganha as ferramentas `remember_fact` (guardar um
+fato — "lembra que...") e `forget_fact` (esquecer um fato pelo id, como
+aparece entre colchetes nos fatos entregues). Memória é por usuário, não por
+conversa: sobrevive entre conversas diferentes. Sem `userId`, nada disso
+acontece, e o comportamento é idêntico ao de antes desta capacidade existir.
+
+```bash
+curl -s -X POST http://localhost:3000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"userId": "kauane", "message": "lembra que eu sou responsável pelo checkout"}' | jq -r '.answer'
+
+# em outra conversa, sem repetir palavras do fato guardado:
+curl -s -X POST http://localhost:3000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"userId": "kauane", "message": "quais serviços são meus?"}' \
+  | jq '{answer, recalled: .metrics.recalledMemories}'
+```
 
 ```bash
 # primeiro turno — sem conversationId
@@ -149,7 +176,8 @@ Resposta de sucesso (200): `{ answer, trace, metrics, stoppedReason, conversatio
 — o `StrategyResult` que a arena imprime, sem transformação, mais o id da
 conversa (o informado, ou o da conversa recém-criada) e, em `metrics`, o
 campo `historyMessages` (`0..12` — mensagens de histórico entregues ao
-agente naquele pedido).
+agente naquele pedido). Com `userId`, `metrics` também traz
+`recalledMemories` (`0..3`); sem `userId`, o campo não aparece.
 
 | Status | `error.code` | Quando |
 |---|---|---|
@@ -160,22 +188,42 @@ agente naquele pedido).
 | 500 | `internal` | falha inesperada; nunca vaza detalhe interno |
 
 Um pedido que não conclui com sucesso (400/404/422/504/500) não grava nada
-na conversa — nem a mensagem, nem uma conversa nova.
+na conversa — nem a mensagem, nem uma conversa nova. Uma falha ao recuperar
+memória (ex.: modelo indisponível) não derruba o pedido: ele segue sem
+fatos recuperados, com `recalledMemories: 0`, e o erro é só registrado no
+servidor.
 
 O estado operacional (serviços, alertas, incidentes, runbooks) é **compartilhado
 por todas as requisições** do mesmo processo e **persiste em SQLite**
 (`OPSPILOT_DB`, padrão `./data/opspilot.db`) — um incidente aberto num pedido
 continua lá mesmo depois de reiniciar o servidor. As conversas (`conversationId`
-e suas mensagens) persistem no mesmo arquivo. A arena e o benchmark continuam
-usando um estado em memória, semeado do zero a cada execução, para que
-comparações entre estratégias sempre partam do mesmo ponto — nenhum dos dois
-usa conversa.
+e suas mensagens) e as memórias semânticas (por `userId`) persistem no mesmo
+arquivo. A arena e o benchmark continuam usando um estado em memória, semeado
+do zero a cada execução, para que comparações entre estratégias sempre partam
+do mesmo ponto — nenhum dos dois usa conversa ou memória.
+
+### Memória semântica: custo em disco
+
+A busca por sentido (recuperar um fato mesmo sem nenhuma palavra em comum
+com o pedido) roda **localmente**, via
+[`@huggingface/transformers`](https://www.npmjs.com/package/@huggingface/transformers)
+— sem chamada de rede a cada uso, sem chave de API para embeddings. Isso tem
+um custo conhecido:
+
+- **+744 MB em `node_modules`** (a maior parte é o `onnxruntime-node`, que
+  traz binários para várias plataformas).
+- **~113 MB de modelo**, baixados uma vez para `data/models/` (já
+  ignorado pelo git) na primeira vez que a memória é usada — ou
+  antecipadamente com `npm run memory:model`.
+
+Sem `userId` em nenhum pedido, nada disso é sequer carregado.
 
 Detalhes completos (contratos, decisões técnicas, roteiro de validação) em
 [specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP),
-[specs/004-sqlite-persistence/](specs/004-sqlite-persistence/) (persistência) e
+[specs/004-sqlite-persistence/](specs/004-sqlite-persistence/) (persistência),
 [specs/007-persistent-conversation/](specs/007-persistent-conversation/) (conversa
-persistente).
+persistente) e [specs/008-semantic-memory/](specs/008-semantic-memory/) (memória
+semântica).
 
 ## Servidor MCP
 
@@ -240,6 +288,11 @@ src/
 ├── mcp/       # servidor MCP opspilot por stdio: ops-mcp-server.ts (composição
 │              # pura sobre tool-definitions.ts) e server.ts (entrada: env, banco,
 │              # transporte, stderr)
+├── memory/    # memória semântica por usuário: embeddings.ts (singleton
+│              # preguiçoso sobre @huggingface/transformers), memory-store.ts
+│              # (MemoryStore, SqliteMemoryStore: remember/recall/forget),
+│              # memory-tools.ts (remember_fact/forget_fact), with-memory.ts
+│              # (decorador que entrega os fatos ao agente)
 ├── http/      # POST /chat: createApp (server.ts), handler e schema (chat.ts),
 │              # corpo de erro consistente (errors.ts)
 ├── scripts/   # comando de seed (grava no banco SQLite)
@@ -257,9 +310,10 @@ reflexão), [specs/003-chat-http-api/](specs/003-chat-http-api/) (API HTTP),
 [specs/004-sqlite-persistence/](specs/004-sqlite-persistence/) (persistência
 em SQLite), [specs/005-provider-status-tool/](specs/005-provider-status-tool/)
 (status de provedores externos),
-[specs/006-mcp-server/](specs/006-mcp-server/) (servidor MCP) e
+[specs/006-mcp-server/](specs/006-mcp-server/) (servidor MCP),
 [specs/007-persistent-conversation/](specs/007-persistent-conversation/) (conversa
-persistente).
+persistente) e [specs/008-semantic-memory/](specs/008-semantic-memory/) (memória
+semântica).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 

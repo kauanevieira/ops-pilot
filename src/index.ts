@@ -4,6 +4,8 @@ import { openDatabase } from "./store/db.ts";
 import { seedDatabase } from "./store/sqlite-schema.ts";
 import { SqliteOpsStore } from "./store/sqlite-ops-store.ts";
 import { SqliteConversationStore } from "./store/sqlite-conversation-store.ts";
+import { SqliteMemoryStore } from "./memory/memory-store.ts";
+import { createLocalEmbedder } from "./memory/embeddings.ts";
 import { baselineState } from "./store/seed.ts";
 
 /**
@@ -41,7 +43,13 @@ function main(): void {
   // by this store's constructor and never touches seedDatabase.
   const conversationStore = new SqliteConversationStore(db);
 
-  const app = createApp({ store, conversationStore });
+  // 008-semantic-memory: same file/connection as the other stores; its own
+  // DDL is applied by this store's constructor. createLocalEmbedder() is a
+  // lazy singleton (R-003) — the model isn't loaded until the first
+  // request that sends a userId actually calls recall/remember.
+  const memoryStore = new SqliteMemoryStore(db, createLocalEmbedder());
+
+  const app = createApp({ store, conversationStore, memoryStore });
 
   app.listen(port, () => {
     console.log(`OpsPilot ouvindo em http://localhost:${port}`);

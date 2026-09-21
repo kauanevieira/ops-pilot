@@ -61,7 +61,8 @@ export function createPlanAndExecuteStrategy(
       const started = Date.now();
       const maxIterations = options?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
       const counter = new LlmCallCounter();
-      const tools = createOpsTools(store);
+      // extraTools (008-semantic-memory, R-011): see react.ts for the rationale.
+      const tools = [...createOpsTools(store), ...(options?.extraTools ?? [])];
 
       async function planner(state: typeof PEState.State) {
         const plan = await createModel().withStructuredOutput<Plan>(planSchema).invoke(

@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import express, { type Express, type ErrorRequestHandler } from "express";
 import { InMemoryOpsRepository } from "../store/in-memory.ts";
 import { InMemoryConversationStore } from "../store/in-memory-conversation-store.ts";
@@ -5,6 +6,9 @@ import { baselineState } from "../store/seed.ts";
 import { resolveStrategy as defaultResolveStrategy, type ResolveStrategy } from "../agents/index.ts";
 import type { OpsRepository } from "../store/repository.ts";
 import type { ConversationStore } from "../store/conversation-store.ts";
+import type { MemoryStore } from "../memory/memory-store.ts";
+import { SqliteMemoryStore } from "../memory/memory-store.ts";
+import { createLocalEmbedder } from "../memory/embeddings.ts";
 import { createChatHandler } from "./chat.ts";
 import { toErrorBody } from "./errors.ts";
 
@@ -19,6 +23,13 @@ export interface ChatAppDeps {
   store?: OpsRepository;
   /** 007-persistent-conversation: one instance, shared across requests, like `store`. */
   conversationStore?: ConversationStore;
+  /**
+   * 008-semantic-memory: one instance, shared across requests. The default
+   * embedder is a lazy singleton (createLocalEmbedder, R-003) — building
+   * this default never loads the model; only a request WITH a `userId`
+   * ever calls `embed()`, so a request without one pays nothing (FR-024).
+   */
+  memoryStore?: MemoryStore;
   resolveStrategy?: ResolveStrategy;
   /** FR-018: milliseconds before a `/chat` request is aborted. */
   timeoutMs?: number;
@@ -33,13 +44,14 @@ export interface ChatAppDeps {
 export function createApp(deps: ChatAppDeps = {}): Express {
   const store = deps.store ?? new InMemoryOpsRepository(baselineState());
   const conversationStore = deps.conversationStore ?? new InMemoryConversationStore();
+  const memoryStore = deps.memoryStore ?? new SqliteMemoryStore(new DatabaseSync(":memory:"), createLocalEmbedder());
   const resolveStrategy = deps.resolveStrategy ?? defaultResolveStrategy;
   const timeoutMs = deps.timeoutMs ?? 180_000;
 
   const app = express();
   app.use(express.json());
 
-  app.post("/chat", createChatHandler({ store, conversationStore, resolveStrategy, timeoutMs }));
+  app.post("/chat", createChatHandler({ store, conversationStore, memoryStore, resolveStrategy, timeoutMs }));
 
   // Registered after the routes, as Express requires for a 4-arg error
   // handler to be recognized as one.

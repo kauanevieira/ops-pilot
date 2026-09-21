@@ -10,6 +10,8 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
 - `zod` na fronteira (HTTP/CLI) para validar entrada e saída
 - Testes com `node:test` via `tsx`
 - Express com SQLite como banco (`node:sqlite`, nativo — sem ORM, sem servidor externo)
+- `@huggingface/transformers` para embeddings locais (memória semântica, `src/memory/`) —
+  modelo `paraphrase-multilingual-MiniLM-L12-v2`, baixado uma vez para `data/models/`
 
 ## Comandos
 
@@ -17,6 +19,7 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
 - `npm run seed` — aplica a linha de base no banco SQLite (5 serviços, 6 alertas, 3 runbooks), idempotente
 - `npm run arena` — compara estratégias de raciocínio sobre o mesmo pedido (`src/arena.ts`)
 - `npm run bench` — executa `src/bench.ts`
+- `npm run memory:model` — baixa o modelo de embeddings para `data/models/` (requer rede; rode antes de `npm test` para não pular o teste de recall semântico real)
 - `npm test` — roda os testes (`node --import tsx --test`)
 - `npm run typecheck` — checagem de tipos (`tsc --noEmit`)
 

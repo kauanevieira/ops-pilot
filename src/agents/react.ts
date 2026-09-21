@@ -31,9 +31,13 @@ export function createReactStrategy(store: OpsRepository): ReasoningStrategy {
       const maxIterations = options?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
       const counter = new LlmCallCounter();
 
+      // extraTools (008-semantic-memory, R-011): whatever the HTTP handler
+      // scoped to this request (e.g. remember_fact/forget_fact for one
+      // userId), appended to the strategy's own ops tools. Empty/absent for
+      // arena, bench and MCP — unchanged behavior.
       const agent = createReactAgent({
         llm: createModel(),
-        tools: createOpsTools(store),
+        tools: [...createOpsTools(store), ...(options?.extraTools ?? [])],
       });
 
       // Stream (rather than invoke) so the last-seen message list survives a

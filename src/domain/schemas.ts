@@ -71,3 +71,31 @@ export type ConversationMessage = z.infer<typeof conversationMessageSchema>;
  */
 export const newConversationMessageSchema = conversationMessageSchema.omit({ createdAt: true });
 export type NewConversationMessage = z.infer<typeof newConversationMessageSchema>;
+
+// --- 008-semantic-memory -----------------------------------------------------
+
+/** Opaque, per-request identifier — no account, no auth (spec, Assumptions). */
+export const userIdSchema = z.string().trim().min(1, "userId não pode ser vazio.");
+
+/**
+ * A memory is a short, self-contained fact (FR-012) — 500 is an assumption
+ * from the spec: the model truncates long input, and a long fact would
+ * dilute its own embedding's meaning.
+ */
+export const memoryFactSchema = z.string().trim().min(1).max(500);
+
+export const rememberResultSchema = z.object({
+  memoryId: z.string().min(1),
+  fact: z.string().min(1),
+  /** false ⇒ a fact with score > DEDUP_THRESHOLD already existed; `fact` is that existing one. */
+  created: z.boolean(),
+});
+export type RememberResult = z.infer<typeof rememberResultSchema>;
+
+export const recalledMemorySchema = z.object({
+  memoryId: z.string().min(1),
+  fact: z.string().min(1),
+  /** Dot product with the query, over normalized vectors — cosine similarity. */
+  score: z.number().min(-1).max(1),
+});
+export type RecalledMemory = z.infer<typeof recalledMemorySchema>;
