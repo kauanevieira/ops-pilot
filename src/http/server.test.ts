@@ -1208,3 +1208,77 @@ describe("POST /chat — ferramentas de memória (009, US3)", () => {
     assert.ok(!recalled.some((m) => m.memoryId === memoryId));
   });
 });
+
+// --- 010-context-measurement: User Story 1 (promptTokens real) --------
+
+describe("POST /chat — medição de contexto (010, US1 — promptTokens)", () => {
+  it("expõe metrics.promptTokens quando a estratégia o reporta (M1)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult({ metrics: { llmCalls: 3, latencyMs: 5, promptTokens: 4200 } }));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.promptTokens, 4200);
+    });
+  });
+
+  it("omite a chave promptTokens quando a estratégia não a reporta, em vez de uma soma parcial (M2)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult()); // sem promptTokens
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      const body = await jsonOf(res);
+      assert.equal("promptTokens" in body.metrics, false);
+    });
+  });
+
+  it("com userId, promptTokens vem só da estratégia — a chamada do refletor (009) não entra (M3)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult({ metrics: { llmCalls: 1, latencyMs: 5, promptTokens: 999 } }));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const memoryStore = fakeMemoryStore();
+    let distillerCalls = 0;
+    const distiller: Distiller = async () => {
+      distillerCalls += 1;
+      return { hasLearning: false, fact: "" };
+    };
+    const { onLearning, next } = learningProbe();
+
+    await withServer({ resolveStrategy, memoryStore, distiller, onLearning }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi", userId: "ana" });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.promptTokens, 999);
+      await next; // aguarda o refletor terminar antes de checar a contagem
+    });
+
+    assert.equal(distillerCalls, 1);
+  });
+
+  it("corpos de erro (400/404/422/504) não têm chave metrics (M8)", async () => {
+    const strategy = fakeStrategy("react", () => new Promise<StrategyResult>(() => {}));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy, timeoutMs: 30 }, async (baseUrl) => {
+      const res400 = await postChat(baseUrl, {});
+      assert.equal("metrics" in (await jsonOf(res400)), false);
+
+      const res504 = await postChat(baseUrl, { message: "oi" });
+      assert.equal(res504.status, 504);
+      assert.equal("metrics" in (await jsonOf(res504)), false);
+    });
+
+    const unknownResolveStrategy: ResolveStrategy = (selection) => {
+      throw new UnknownStrategyError(selection.name ?? "react", ["react"]);
+    };
+    await withServer({ resolveStrategy: unknownResolveStrategy }, async (baseUrl) => {
+      const res422 = await postChat(baseUrl, { message: "oi", strategy: "nope" });
+      assert.equal("metrics" in (await jsonOf(res422)), false);
+    });
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res404 = await postChat(baseUrl, { message: "oi", conversationId: "não-existe" });
+      assert.equal("metrics" in (await jsonOf(res404)), false);
+    });
+  });
+});

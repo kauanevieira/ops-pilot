@@ -1,5 +1,6 @@
 import { LlmCallCounter } from "./llm-counter.ts";
 import { buildCritiqueContext, createLlmCritic, type Critic, type Critique } from "./critic.ts";
+import { promptTokensField, sumPromptTokens } from "../context/tokens.ts";
 import type { ReasoningStrategy, RunOptions } from "./types.ts";
 import type { StoppedReason, StrategyResult, TraceEvent } from "../trace/types.ts";
 
@@ -84,6 +85,13 @@ export function withReflection(strategy: ReasoningStrategy, options?: Reflection
 
       const trace: TraceEvent[] = [...attempt.trace];
       let llmCalls = attempt.metrics.llmCalls;
+      // 010-context-measurement, FR-007, R-005: summed the same way as
+      // llmCalls, across every attempt plus the critic's own calls.
+      // `undefined` propagates through `sumPromptTokens` — one attempt or
+      // critic call that didn't report usage makes the whole total
+      // unknown, matching the metrics object rebuilt fresh on every
+      // return below (why 007/008 wrap this decorator, not the reverse).
+      let promptTokens = attempt.metrics.promptTokens;
       let stoppedReason: StoppedReason = attempt.stoppedReason;
       const critiqueCounter = new LlmCallCounter();
 
@@ -99,7 +107,7 @@ export function withReflection(strategy: ReasoningStrategy, options?: Reflection
           return {
             answer: attempt.answer,
             trace,
-            metrics: { llmCalls, latencyMs: Date.now() - started },
+            metrics: { llmCalls, latencyMs: Date.now() - started, ...promptTokensField(sumPromptTokens(promptTokens, critiqueCounter.promptTokens)) },
             stoppedReason,
           };
         }
@@ -111,7 +119,7 @@ export function withReflection(strategy: ReasoningStrategy, options?: Reflection
           return {
             answer: attempt.answer,
             trace,
-            metrics: { llmCalls, latencyMs: Date.now() - started },
+            metrics: { llmCalls, latencyMs: Date.now() - started, ...promptTokensField(sumPromptTokens(promptTokens, critiqueCounter.promptTokens)) },
             stoppedReason,
           };
         }
@@ -125,7 +133,7 @@ export function withReflection(strategy: ReasoningStrategy, options?: Reflection
           return {
             answer: attempt.answer,
             trace,
-            metrics: { llmCalls, latencyMs: Date.now() - started },
+            metrics: { llmCalls, latencyMs: Date.now() - started, ...promptTokensField(sumPromptTokens(promptTokens, critiqueCounter.promptTokens)) },
             stoppedReason,
           };
         }
@@ -135,6 +143,7 @@ export function withReflection(strategy: ReasoningStrategy, options?: Reflection
         attempt = await strategy.run(enrichInput(input, attempt, verdict), runOptions);
         trace.push(...attempt.trace);
         llmCalls += attempt.metrics.llmCalls;
+        promptTokens = sumPromptTokens(promptTokens, attempt.metrics.promptTokens);
         // FR-015: reflexões esgotadas sem aprovação prevalece sobre o
         // stoppedReason da própria tentativa.
         stoppedReason = isLastReflection ? "max-reflections" : attempt.stoppedReason;
@@ -144,7 +153,7 @@ export function withReflection(strategy: ReasoningStrategy, options?: Reflection
       return {
         answer: attempt.answer,
         trace,
-        metrics: { llmCalls, latencyMs: Date.now() - started },
+        metrics: { llmCalls, latencyMs: Date.now() - started, ...promptTokensField(sumPromptTokens(promptTokens, critiqueCounter.promptTokens)) },
         stoppedReason,
       };
     },

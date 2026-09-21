@@ -22,6 +22,42 @@ export interface RunMetrics {
    * `withMemory` sets it; every other producer is unaffected.
    */
   recalledMemories?: number;
+  /**
+   * 010-context-measurement: REAL sum of the input tokens the provider
+   * reported (`usage_metadata.input_tokens`) across every model call
+   * counted in `llmCalls` for this run — base strategy, every reflection
+   * attempt, and the critic. Optional and additive. Absent — the key is
+   * missing, never present as `undefined` — when any of those calls
+   * didn't report usage; a partial sum is never shown as the total.
+   * Producers: react, plan-and-execute, withReflection.
+   */
+  promptTokens?: number;
+  /**
+   * 010-context-measurement: ESTIMATED breakdown (chars/4, see
+   * estimateTokens) of the context the `/chat` handler composed for this
+   * request, by source. Only the handler sets it — arena, bench and the
+   * MCP server are unaffected. Not reconciled with `promptTokens`: it
+   * covers only the message/history/memories sources, never strategy
+   * instructions, tool schemas or the growing trace, so it is expected to
+   * come out lower than the real total.
+   */
+  contextBreakdown?: ContextBreakdown;
+}
+
+/**
+ * 010-context-measurement: estimated token count per context source
+ * composed by the `/chat` handler. Each field is `estimateTokens` of the
+ * exact text block that source contributed (see
+ * `src/context/breakdown.ts`); an absent source is `0`, never omitted.
+ * `total` is the sum of the three — not a re-estimate of the concatenated
+ * text, so it can be up to 2 tokens higher than estimating the whole input
+ * at once, since each block rounds up independently.
+ */
+export interface ContextBreakdown {
+  message: number;
+  history: number;
+  memories: number;
+  total: number;
 }
 
 /**

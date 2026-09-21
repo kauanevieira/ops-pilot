@@ -31,7 +31,7 @@ Nada a instalar ou configurar (R-012): nenhuma dependência nova, nenhum DDL.
 
 **⚠️ CRITICAL**: nenhuma história começa antes desta fase.
 
-- [ ] T001 Em `src/trace/types.ts`: adicionar `interface ContextBreakdown { message: number;
+- [x] T001 Em `src/trace/types.ts`: adicionar `interface ContextBreakdown { message: number;
       history: number; memories: number; total: number }` e, em `RunMetrics`, os campos
       opcionais `promptTokens?: number` e `contextBreakdown?: ContextBreakdown`, cada um com
       comentário no estilo dos campos da 007/008. `promptTokens` é "real, soma dos
@@ -39,7 +39,7 @@ Nada a instalar ou configurar (R-012): nenhuma dependência nova, nenhum DDL.
       não reportou". `contextBreakdown` é "estimativa (caracteres ÷ 4), só no `/chat`". Deixar
       registrado que "ausente" é ausência de chave, não `undefined` como valor (data-model.md,
       R-009)
-- [ ] T002 Criar `src/context/tokens.ts` com o comentário de módulo (o que é real e o que é
+- [x] T002 Criar `src/context/tokens.ts` com o comentário de módulo (o que é real e o que é
       estimado, com referência a research R-001/R-006) e nenhuma função ainda. Cada história
       acrescenta as suas funções
 
@@ -58,20 +58,20 @@ estratégia falsa no `/chat`, a soma é exata; uma chamada sem consumo remove o 
 
 ### Tests for User Story 1 ⚠️
 
-- [ ] T003 [P] [US1] Criar `src/context/tokens.test.ts` com os testes de
+- [x] T003 [P] [US1] Criar `src/context/tokens.test.ts` com os testes de
       `inputTokensFromResult`. Montar `LLMResult` à mão com
       `{ generations: [[{ text: "", message: new AIMessage({ content: "", usage_metadata: {
       input_tokens, output_tokens, total_tokens } }) }]] }`. Casos: 120 → `120` (U1); `0` →
       `0` (U2); `AIMessage` sem `usage_metadata` → `undefined` (U3); `generations: [[]]` e
       geração sem `message` → `undefined` (U4). Incluir também `sumPromptTokens`: `()` → `0`,
       `(10, 20)` → `30`, `(10, undefined)` → `undefined`, `(0, 0)` → `0`
-- [ ] T004 [P] [US1] Criar `src/agents/llm-counter.test.ts` disparando os callbacks direto na
+- [x] T004 [P] [US1] Criar `src/agents/llm-counter.test.ts` disparando os callbacks direto na
       instância: `calls` inalterado (K1); 3 × (start + end com 100, 200, 300) →
       `promptTokens === 600` (K2); 2 starts e 1 end com consumo → `undefined` (K3); start + end
       sem `usage_metadata` → `undefined` (K3); instância nova → `calls === 0` e
       `promptTokens === 0` (K4); duas instâncias alimentadas de forma diferente não se
       misturam (K5)
-- [ ] T005 [P] [US1] Em `src/agents/reflection.test.ts`: `countingCritic` passa a aceitar um
+- [x] T005 [P] [US1] Em `src/agents/reflection.test.ts`: `countingCritic` passa a aceitar um
       consumo opcional por chamada e, quando houver, dispara também `handleLLMEnd` com um
       `LLMResult` com esse `input_tokens`. Novos casos, com tentativas falsas cujo
       `metrics.promptTokens` é conhecido: (R1) tentativa 100 + crítico 40 que aprova →
@@ -81,7 +81,7 @@ estratégia falsa no `/chat`, a soma é exata; uma chamada sem consumo remove o 
       `handleChatModelStart` e depois lança → chave ausente; `maxReflections: 0` → a tentativa
       volta intacta, com o `promptTokens` dela. Os testes existentes de `llmCalls` continuam
       sem mudança
-- [ ] T006 [P] [US1] Em `src/http/server.test.ts`, bloco `describe` novo "010 promptTokens":
+- [x] T006 [P] [US1] Em `src/http/server.test.ts`, bloco `describe` novo "010 promptTokens":
       estratégia falsa com `metrics: { llmCalls: 3, latencyMs: 5, promptTokens: 4200 }` →
       `body.metrics.promptTokens === 4200`; estratégia falsa sem o campo →
       `"promptTokens" in body.metrics === false` (M2); pedido com `userId` e distiller de
@@ -90,32 +90,32 @@ estratégia falsa no `/chat`, a soma é exata; uma chamada sem consumo remove o 
 
 ### Implementation for User Story 1
 
-- [ ] T007 [US1] Em `src/context/tokens.ts`: `inputTokensFromResult(output: LLMResult): number |
+- [x] T007 [US1] Em `src/context/tokens.ts`: `inputTokensFromResult(output: LLMResult): number |
       undefined` lê `output.generations[0]?.[0]`. Só aceita geração com `message` que passe
       em `isAIMessage` e com `usage_metadata.input_tokens` do tipo `number`. Não ler
       `llmOutput` (R-001). Mais `sumPromptTokens(...values: (number | undefined)[]): number |
       undefined`. Importar `LLMResult` de `@langchain/core/outputs` e `isAIMessage` de
       `@langchain/core/messages`. Faz T003 passar
-- [ ] T008 [US1] Em `src/agents/llm-counter.ts`: campos privados `reportedCalls` e
+- [x] T008 [US1] Em `src/agents/llm-counter.ts`: campos privados `reportedCalls` e
       `promptTokenSum`; `override handleLLMEnd(output: LLMResult)` soma quando
       `inputTokensFromResult` devolve número; getter `promptTokens` =
       `reportedCalls === calls ? promptTokenSum : undefined`. Atualizar o comentário da classe
       (research R-004: uma falha dispara `handleLLMError`, nunca `handleLLMEnd`, e por isso
       anula o total). Faz T004 passar
-- [ ] T009 [P] [US1] Em `src/agents/react.ts`: nos dois retornos (`completed` e
+- [x] T009 [P] [US1] Em `src/agents/react.ts`: nos dois retornos (`completed` e
       `max-iterations`), `metrics: { llmCalls: counter.calls, latencyMs: …,
       ...promptTokensField(counter.promptTokens) }`. Criar o helper
       `promptTokensField(value) => value === undefined ? {} : { promptTokens: value }` em
       `src/context/tokens.ts`, para que "ausente" seja ausência de chave
-- [ ] T010 [P] [US1] Em `src/agents/plan-and-execute.ts`: o mesmo spread no único retorno. O
+- [x] T010 [P] [US1] Em `src/agents/plan-and-execute.ts`: o mesmo spread no único retorno. O
       contador já cobre planejador, passos e replanejador
-- [ ] T011 [US1] Em `src/agents/reflection.ts`: guardar os `promptTokens` de cada tentativa
+- [x] T011 [US1] Em `src/agents/reflection.ts`: guardar os `promptTokens` de cada tentativa
       (tentativa 1 e cada regeneração). Em todos os quatro retornos com revisão (crítico
       falhou, aprovou, sinal abortado, reflexões esgotadas), acrescentar
       `...promptTokensField(sumPromptTokens(...tentativas, critiqueCounter.promptTokens))`. O
       atalho `maxReflections <= 0` não muda. Comentário curto citando FR-007 e R-005. Faz
       T005 passar
-- [ ] T012 [US1] Rodar `npm run typecheck` e `npm test`. T006 deve passar sem mudança em
+- [x] T012 [US1] Rodar `npm run typecheck` e `npm test`. T006 deve passar sem mudança em
       `src/http/chat.ts`, porque o handler já espalha `result.metrics` no corpo. Se não
       passar, corrigir no handler sem reconstruir `metrics`
 
