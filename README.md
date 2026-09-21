@@ -87,6 +87,10 @@ npm test
 npm run dev
 ```
 
+O agente também sabe consultar a página pública de status de GitHub e Cloudflare
+(`check_provider_status`, útil para "é o nosso ou é do provedor?") — sem chave, sem
+variável de ambiente nova, nada a configurar para usar.
+
 ## API HTTP
 
 `POST /chat` — envia um pedido em linguagem natural e recebe a mesma
@@ -96,6 +100,18 @@ execução que a arena produz, por HTTP.
 curl -X POST http://localhost:3000/chat \
   -H 'Content-Type: application/json' \
   -d '{"message": "quais alertas estão abertos?"}'
+```
+
+Corpo completo: `{ answer, trace, metrics, stoppedReason }`. Pra ler só a
+resposta final, sem o rastro nem as métricas — o `jq -r` já converte as
+quebras de linha em linhas de verdade, então a resposta sai formatada como o
+modelo escreveu:
+
+```bash
+curl -s -X POST http://localhost:3000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "quais incidentes estão abertos?"}' \
+  | jq -r '.answer'
 ```
 
 Corpo aceito (validado com zod):
@@ -139,10 +155,10 @@ src/
 ├── store/     # transições de estado puras + repositórios in-memory e SQLite
 │              # (sqlite-ops-store.ts, sqlite-schema.ts, db.ts)
 ├── trace/     # tipos e formatação do rastro de raciocínio (puro)
-├── agents/    # fábrica do modelo, as 5 ferramentas (list_alerts, list_incidents,
-│              # consultar_runbook, open_incident, resolve_incident), estratégias
-│              # ReAct e Plan-and-Execute, crítico, camada de reflexão
-│              # (withReflection) e o registry (index.ts)
+├── agents/    # fábrica do modelo, as 6 ferramentas (list_alerts, list_incidents,
+│              # consultar_runbook, open_incident, resolve_incident,
+│              # check_provider_status), estratégias ReAct e Plan-and-Execute,
+│              # crítico, camada de reflexão (withReflection) e o registry (index.ts)
 ├── http/      # POST /chat: createApp (server.ts), handler e schema (chat.ts),
 │              # corpo de erro consistente (errors.ts)
 ├── scripts/   # comando de seed (grava no banco SQLite)
