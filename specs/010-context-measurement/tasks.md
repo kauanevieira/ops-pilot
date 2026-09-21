@@ -202,7 +202,7 @@ parado, erro no turno 1 e saída diferente de zero (quickstart passos 3 e 4).
 
 ### Implementation for User Story 3
 
-- [ ] T023 [US3] Criar `scripts/conversa-longa.sh` (bash, `set -euo pipefail`) conforme
+- [x] T023 [US3] Criar `scripts/conversa-longa.sh` (bash, `set -euo pipefail`) conforme
       `contracts/conversa-longa.md`. Checar `curl` e `jq` no início (S5). `BASE_URL` vem de
       `${OPSPILOT_URL:-http://localhost:3000}`. Array com 16 mensagens de plantão sobre o
       seed, incluindo acompanhamentos que dependem do histórico ("e o runbook dele?"). Montar
@@ -212,7 +212,7 @@ parado, erro no turno 1 e saída diferente de zero (quickstart passos 3 e 4).
       `llmCalls`, `est.msg`, `est.hist`, `est.mem`, `est.total` (S2). Usar `curl -sS
       --fail-with-body`; em falha, `turno N falhou:` mais o corpo ou o erro em stderr, e
       `exit 1` (S3)
-- [ ] T024 [US3] `chmod +x scripts/conversa-longa.sh` e conferir que o git registra o modo
+- [x] T024 [US3] `chmod +x scripts/conversa-longa.sh` e conferir que o git registra o modo
       executável (`git ls-files -s scripts/conversa-longa.sh` → `100755` depois do add). Se
       `shellcheck` estiver instalado, rodar sem avisos; se não estiver, pular e dizer isso
 
