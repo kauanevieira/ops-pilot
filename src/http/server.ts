@@ -16,6 +16,8 @@ import { createLearningReflector, logLearningOutcome, LEARNING_TIMEOUT_MS } from
 import type { Summarizer } from "../context/summarizer.ts";
 import { createModelSummarizer } from "../context/summarizer.ts";
 import { SUMMARY_TIMEOUT_MS } from "../context/conversation-context.ts";
+import type { Router } from "../agents/router.ts";
+import { ROUTER_TIMEOUT_MS, createModelRouter } from "../agents/router.ts";
 import { createChatHandler } from "./chat.ts";
 import { toErrorBody } from "./errors.ts";
 
@@ -62,6 +64,16 @@ export interface ChatAppDeps {
   summarizer?: Summarizer;
   /** 011-history-summarization, FR-010: independent of `timeoutMs` — default `SUMMARY_TIMEOUT_MS` (30s). */
   summaryTimeoutMs?: number;
+  /**
+   * 012-unified-graph: decides which strategy runs when the request omits
+   * `strategy` and `reflect` (contracts/router.md). The default,
+   * `createModelRouter()`, is only ever CONSTRUCTED here — building it
+   * reads no environment variable, same pattern as `summarizer` and
+   * `distiller` above; tests inject their own deterministic fake.
+   */
+  router?: Router;
+  /** 012-unified-graph, FR-011: independent of `timeoutMs` — default `ROUTER_TIMEOUT_MS` (15s). */
+  routerTimeoutMs?: number;
 }
 
 /**
@@ -81,6 +93,8 @@ export function createApp(deps: ChatAppDeps = {}): Express {
   const timeoutMs = deps.timeoutMs ?? 180_000;
   const summarizer = deps.summarizer ?? createModelSummarizer();
   const summaryTimeoutMs = deps.summaryTimeoutMs ?? SUMMARY_TIMEOUT_MS;
+  const router = deps.router ?? createModelRouter();
+  const routerTimeoutMs = deps.routerTimeoutMs ?? ROUTER_TIMEOUT_MS;
 
   const learn = createLearningReflector({ memoryStore, distiller, timeoutMs: learningTimeoutMs });
 
@@ -99,6 +113,8 @@ export function createApp(deps: ChatAppDeps = {}): Express {
       timeoutMs,
       summarizer,
       summaryTimeoutMs,
+      router,
+      routerTimeoutMs,
     }),
   );
 

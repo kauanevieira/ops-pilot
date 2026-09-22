@@ -154,3 +154,38 @@ export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
  */
 export const newConversationSummarySchema = conversationSummarySchema.omit({ updatedAt: true });
 export type NewConversationSummary = z.infer<typeof newConversationSummarySchema>;
+
+// --- 012-unified-graph --------------------------------------------------------
+
+/** Cap on the router's `reason` as registered in the trace (FR-013). Truncated, never rejected. */
+export const ROUTE_REASON_MAX_CHARS = 300;
+
+/**
+ * The three reasoning strategies the router can pick between
+ * (contracts/router.md). `reflect` means reflection over ReAct
+ * (production-graph.ts's `ROUTE_SELECTIONS`) — reflection over
+ * plan-and-execute stays override-only (spec Assumptions).
+ */
+export const routeSchema = z.enum(["react", "plan-and-execute", "reflect"]);
+export type Route = z.infer<typeof routeSchema>;
+
+/**
+ * Structured output the router model returns (data-model.md). Every field
+ * has `.describe()` (Constitution, Principle IV, rule 5) since this reaches
+ * the model as an output schema, even though the router isn't a tool.
+ * `reason` has no `.max()` on purpose — FR-013 truncates it (`capReason`),
+ * never rejects it.
+ */
+export const routeDecisionSchema = z.object({
+  route: routeSchema.describe("estratégia de raciocínio escolhida para o pedido: react, plan-and-execute ou reflect"),
+  reason: z.string().describe("uma frase curta explicando por que essa estratégia é a mais adequada ao pedido"),
+});
+export type RouteDecision = z.infer<typeof routeDecisionSchema>;
+
+/** Where a request's route came from (FR-017). */
+export const routeSourceSchema = z.enum(["router", "override", "fallback"]);
+export type RouteSource = z.infer<typeof routeSourceSchema>;
+
+/** The production graph's nodes (FR-020) — the closed set `TraceEvent.nodeName` accepts. */
+export const nodeNameSchema = z.enum(["context", "router", "react", "plan-and-execute", "reflect", "response"]);
+export type NodeName = z.infer<typeof nodeNameSchema>;

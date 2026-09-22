@@ -125,7 +125,7 @@ Corpo aceito (validado com zod):
 | Campo | Tipo | Obrigatório | Padrão |
 |---|---|---|---|
 | `message` | `string` | sim | — |
-| `strategy` | `"react"` \| `"plan-and-execute"` | não | `"react"` |
+| `strategy` | `"react"` \| `"plan-and-execute"` | não | ausente: escolhida por um roteador (`react`, `plan-and-execute` ou `reflect`) |
 | `reflect` | `boolean` | não | `false` |
 | `conversationId` | `string` | não | — (cria conversa nova) |
 | `userId` | `string` | não | — (sem memória) |
@@ -133,6 +133,28 @@ Corpo aceito (validado com zod):
 `reflect: true` aplica a camada de reflexão sobre a estratégia escolhida —
 equivalente a `reflect:react`/`reflect:plan-and-execute` na arena, mas como
 modificador, não como prefixo de nome.
+
+Sem `strategy` e sem `reflect: true`, o `/chat` não roda mais sempre ReAct: um
+**roteador** — um nó do grafo de produção, guiado por uma tabela com quando
+usar cada estratégia e por quanto custa cada uma — decide entre `react`,
+`plan-and-execute` e `reflect` (reflexão sobre ReAct) a partir do pedido e da
+conversa. Uma falha do roteador (provedor indisponível, resposta fora do
+formato, tempo esgotado) nunca derruba o pedido: ele recua para `react`, sem
+erro para quem chamou. Enviar `strategy` (com ou sem `reflect`) ou só
+`reflect: true` continua valendo exatamente como antes — a escolha é do
+pedido, e o roteador nem é consultado. Todo pedido traz no `trace` um evento
+`route` com a estratégia executada, o motivo e a origem da escolha
+(`router`, `override` ou `fallback`), e todo evento do rastro passa a trazer
+`nodeName`, o nó do grafo (`context`, `router`, `react`, `plan-and-execute`,
+`reflect` ou `response`) que o produziu. A chamada do roteador nunca entra em
+`llmCalls` nem em `promptTokens` — mede-se pelo evento `route`.
+
+```bash
+curl -s -X POST http://localhost:3000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "investigue os alertas do checkout, descubra o responsável e abra um incidente"}' \
+  | jq '.trace[] | select(.type=="route")'
+```
 
 `conversationId` continua uma conversa: as até 8 mensagens mais recentes
 daquela conversa (mensagem de quem pediu + resposta final, alternadas) são
@@ -198,8 +220,11 @@ Resposta de sucesso (200): `{ answer, trace, metrics, stoppedReason, conversatio
 — o `StrategyResult` que a arena imprime, mais o id da conversa (o
 informado, ou o da conversa recém-criada). Quando o pedido provoca uma
 sumarização, `trace` começa com um evento `{ type: "summarize", content,
-absorbedMessages }`, antes dos eventos da estratégia — ausente em todo
-pedido que não resume. Em `metrics`, os campos `historyMessages` (`0..15` —
+absorbedMessages }` (011); logo em seguida vem sempre um evento `{ type:
+"route", route, strategy, reason, source }` (012), antes de qualquer evento
+da estratégia executada — o único evento presente em todo pedido do `/chat`,
+roteado ou não. Todo evento do rastro traz também `nodeName`, o nó do grafo
+que o produziu. Em `metrics`, os campos `historyMessages` (`0..15` —
 mensagens de histórico entregues ao agente na íntegra naquele pedido) e
 `summaryCoveredMessages` (`0` sem resumo, ou quantas mensagens o resumo
 entregue cobre). Com `userId`, `metrics` também traz `recalledMemories`
@@ -355,7 +380,10 @@ src/
 │              # tools.ts adapta para LangChain; fábrica do modelo, estratégias
 │              # ReAct e Plan-and-Execute, crítico, reflexão (withReflection),
 │              # histórico de conversa (withConversationHistory) e o registry
-│              # (index.ts)
+│              # (index.ts); router.ts (roteador: withStructuredOutput, tabela
+│              # de estratégias no prompt); production-graph.ts (o grafo do
+│              # /chat: context -> router -> react|plan-and-execute|reflect ->
+│              # response, único consumidor do router e do registry acima)
 ├── mcp/       # servidor MCP opspilot por stdio: ops-mcp-server.ts (composição
 │              # pura sobre tool-definitions.ts) e server.ts (entrada: env, banco,
 │              # transporte, stderr)
@@ -393,8 +421,11 @@ em SQLite), [specs/005-provider-status-tool/](specs/005-provider-status-tool/)
 [specs/007-persistent-conversation/](specs/007-persistent-conversation/) (conversa
 persistente), [specs/008-semantic-memory/](specs/008-semantic-memory/) (memória
 semântica), [specs/009-learning-reflector/](specs/009-learning-reflector/) (refletor
-de aprendizado) e [specs/010-context-measurement/](specs/010-context-measurement/)
-(medição de contexto).
+de aprendizado), [specs/010-context-measurement/](specs/010-context-measurement/)
+(medição de contexto),
+[specs/011-history-summarization/](specs/011-history-summarization/) (sumarização
+de histórico) e [specs/012-unified-graph/](specs/012-unified-graph/) (grafo
+unificado com roteador).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 

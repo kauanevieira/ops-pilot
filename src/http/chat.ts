@@ -2,25 +2,18 @@ import { z } from "zod";
 import type { RequestHandler } from "express";
 import type { OpsRepository } from "../store/repository.ts";
 import type { ConversationStore } from "../store/conversation-store.ts";
-import { DEFAULT_MAX_ITERATIONS, UnknownStrategyError, type ResolveStrategy } from "../agents/index.ts";
+import { UnknownStrategyError, type ResolveStrategy } from "../agents/index.ts";
 import type { ReasoningStrategy } from "../agents/types.ts";
-import { withConversationHistory } from "../agents/conversation-history.ts";
 import { ConversationNotFoundError } from "../domain/errors.ts";
-import { userIdSchema, type RecalledMemory } from "../domain/schemas.ts";
+import { userIdSchema } from "../domain/schemas.ts";
 import type { MemoryStore } from "../memory/memory-store.ts";
-import { createMemoryTools } from "../memory/memory-tools.ts";
-import { withMemory } from "../memory/with-memory.ts";
 import type { LearningReflector, LearningOutcome } from "../memory/learning-reflector.ts";
 import { toErrorBody, zodIssuesToDetails } from "./errors.ts";
-import { buildContextBreakdown } from "../context/breakdown.ts";
-import {
-  prepareConversationContext,
-  EMPTY_CONVERSATION_CONTEXT,
-  SUMMARY_TIMEOUT_MS,
-  type ConversationContext,
-} from "../context/conversation-context.ts";
+import { SUMMARY_TIMEOUT_MS } from "../context/conversation-context.ts";
 import type { Summarizer } from "../context/summarizer.ts";
-import type { StrategyResult, TraceEvent } from "../trace/types.ts";
+import { createProductionGraph, isOverride, type OverrideChoice } from "../agents/production-graph.ts";
+import { ROUTER_TIMEOUT_MS, type Router } from "../agents/router.ts";
+import type { StrategyResult } from "../trace/types.ts";
 
 /**
  * Validates only the SHAPE of the body (R-003): whether `strategy` names a
@@ -71,14 +64,27 @@ export interface CreateChatHandlerOptions {
   summarizer: Summarizer;
   /** 011-history-summarization, FR-010: default SUMMARY_TIMEOUT_MS (30s); injected short in tests. */
   summaryTimeoutMs?: number;
+  /** 012-unified-graph: injectable router (contracts/router.md); consulted only without override. */
+  router: Router;
+  /** 012-unified-graph, FR-011: default ROUTER_TIMEOUT_MS (15s); injected short in tests. */
+  routerTimeoutMs?: number;
 }
 
 /**
  * The `POST /chat` handler (contracts/chat-endpoint.md, amended by
- * 007-persistent-conversation/contracts/chat-endpoint.md). Fixed order:
- * parse body -> validate shape (400) -> resolve strategy (422) -> resolve
- * conversation (404) -> run with a deadline (504/500) -> record the turn ->
- * 200. Nothing past a failed step runs.
+ * 007-persistent-conversation, 008, 009, 010, 011 and
+ * 012-unified-graph/contracts/chat-endpoint.md). Fixed order: parse body ->
+ * validate shape (400) -> [override: resolve strategy (422)] -> resolve
+ * conversation (404) -> run the production graph with a deadline
+ * (504/500) -> record the turn -> 200. Nothing past a failed step runs.
+ *
+ * 012-unified-graph (R-014): the handler itself only keeps the HTTP edges —
+ * parsing, the override/422 check, the 404 check, the race against
+ * `timeoutMs`, recording the turn and firing the learning reflector.
+ * Everything that used to compose the strategy's input by hand (context
+ * preparation, recall, the memory/history decorators, the `contextBreakdown`)
+ * now lives inside the production graph (`agents/production-graph.ts`),
+ * which this handler compiles once and runs once per request.
  */
 export function createChatHandler(options: CreateChatHandlerOptions): RequestHandler {
   const {
@@ -91,7 +97,23 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
     timeoutMs,
     summarizer,
     summaryTimeoutMs = SUMMARY_TIMEOUT_MS,
+    router,
+    routerTimeoutMs = ROUTER_TIMEOUT_MS,
   } = options;
+
+  // Compiled once per handler (research R-001), not per request — the
+  // graph's own dependencies are fixed per app; only what varies by
+  // request (message, conversationId, userId, override) is passed to `run`.
+  const graph = createProductionGraph({
+    store,
+    conversationStore,
+    memoryStore,
+    resolveStrategy,
+    summarizer,
+    summaryTimeoutMs,
+    router,
+    routerTimeoutMs,
+  });
 
   return (req, res, next) => {
     const parsed = chatRequestSchema.safeParse(req.body);
@@ -109,18 +131,27 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
     // no further narrowing.
     const { message, conversationId, userId } = parsed.data;
 
-    let strategy: ReasoningStrategy;
-    try {
-      strategy = resolveStrategy({ name: parsed.data.strategy, reflect: parsed.data.reflect }, store);
-    } catch (error) {
-      if (error instanceof UnknownStrategyError) {
-        res
-          .status(422)
-          .json(toErrorBody("unknown_strategy", error.message, { validStrategies: error.validStrategies }));
+    // 012-unified-graph (R-003, FR-015, FR-016): `strategy`/`reflect` in
+    // the request impose the choice and skip the router entirely. The 422
+    // check stays HERE, before any graph node runs — resolving inside the
+    // graph would only happen for the router's own decision, which can
+    // never be an "unknown strategy" (it's constrained by `routeSchema`).
+    let override: OverrideChoice | undefined;
+    if (isOverride(parsed.data)) {
+      let strategy: ReasoningStrategy;
+      try {
+        strategy = resolveStrategy({ name: parsed.data.strategy, reflect: parsed.data.reflect }, store);
+      } catch (error) {
+        if (error instanceof UnknownStrategyError) {
+          res
+            .status(422)
+            .json(toErrorBody("unknown_strategy", error.message, { validStrategies: error.validStrategies }));
+          return;
+        }
+        next(error);
         return;
       }
-      next(error);
-      return;
+      override = { selection: { name: parsed.data.strategy, reflect: parsed.data.reflect }, strategy };
     }
 
     // FR-013/R-002: a well-formed id that doesn't exist is 404, checked
@@ -130,7 +161,7 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
     // conversation behind. 011-history-summarization (R-013): this is now
     // a `countMessages` existence check, not a read of the messages
     // themselves — the actual verbatim window is resolved later, inside
-    // `runChat`, together with the summary.
+    // the graph's `context` node, together with the summary.
     try {
       if (conversationId) conversationStore.countMessages(conversationId);
     } catch (error) {
@@ -145,86 +176,13 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
     }
 
     // R-006: cancellation AND an independent clock, not just one of the
-    // two. `signal` reaches the strategy so a run that outlives the
-    // deadline actually stops touching the shared store (FR-020); the race
-    // against `timeoutMs` is what guarantees the client gets a response in
-    // time even if some path along the way ignored the signal.
+    // two. `signal` reaches the graph so a run that outlives the deadline
+    // actually stops touching the shared store (FR-020); the race against
+    // `timeoutMs` is what guarantees the client gets a response in time
+    // even if some path along the way ignored the signal.
     const controller = new AbortController();
 
-    // 008-semantic-memory, R-013: with a userId, recall happens HERE —
-    // inside the promise that races the deadline, and only the raw message
-    // (never the history-enriched text) is used as the query. A recall
-    // failure is fail-open (FR-025): logged, treated as zero memories, and
-    // the request proceeds — losing memory degrades the answer, it doesn't
-    // corrupt it, unlike a failure inside the strategy's own tool calls.
-    //
-    // 011-history-summarization (R-005): the conversation context is
-    // prepared in PARALLEL with recall — the two are independent, both
-    // fail-open, and running them together avoids summing their latencies.
-    //
-    // Composition (R-012, matching 007's R-008; 011's H6): withMemory wraps
-    // the base `strategy` (which may already be withReflection-wrapped by
-    // resolveStrategy) BEFORE withConversationHistory wraps everything —
-    // so the final text is facts, then summary, then history, then the
-    // message, and every decorator's metrics survive withReflection
-    // rebuilding `metrics`.
-    async function runChat(): Promise<StrategyResult> {
-      let strategyToRun: ReasoningStrategy = strategy;
-      // 010-context-measurement: declared here (not inside the `if`) so
-      // the context breakdown below can estimate the memories block for
-      // ANY request — `[]` without a userId is the correct input for
-      // FR-011's "absent source is 0", not a special case.
-      let memories: RecalledMemory[] = [];
-
-      const [conversationContext] = await Promise.all([
-        conversationId
-          ? prepareConversationContext({ conversationStore, summarizer, timeoutMs: summaryTimeoutMs }, conversationId, controller.signal)
-          : Promise.resolve<ConversationContext>(EMPTY_CONVERSATION_CONTEXT),
-        userId
-          ? memoryStore
-              .recall(userId, message)
-              .then((recalled) => {
-                memories = recalled;
-              })
-              .catch((error: unknown) => {
-                console.error("Falha ao recuperar memória semântica:", error);
-              })
-          : Promise.resolve(),
-      ]);
-
-      if (userId) {
-        strategyToRun = withMemory(strategyToRun, { memories, tools: createMemoryTools(memoryStore, userId) });
-      }
-      const finalStrategy = withConversationHistory(strategyToRun, conversationContext);
-      const result = await finalStrategy.run(message, {
-        maxIterations: DEFAULT_MAX_ITERATIONS,
-        signal: controller.signal,
-      });
-
-      // 010-context-measurement, R-008 (amended by 011, R-011): anchored
-      // HERE, outside every decorator — `withReflection` rebuilds `metrics`
-      // from scratch on every return, so anything attached inside it would
-      // be lost. The `summarize` trace event, if any, goes at position 0,
-      // before the strategy's own trace.
-      const trace: TraceEvent[] = conversationContext.summarizeEvent
-        ? [conversationContext.summarizeEvent, ...result.trace]
-        : result.trace;
-      return {
-        ...result,
-        trace,
-        metrics: {
-          ...result.metrics,
-          contextBreakdown: buildContextBreakdown({
-            message,
-            history: conversationContext.messages,
-            summary: conversationContext.summary,
-            memories,
-          }),
-        },
-      };
-    }
-
-    const runPromise = runChat();
+    const runPromise = graph.run({ message, conversationId, userId, override }, controller.signal);
     // The losing side of the race below must never become an unhandled
     // rejection: an aborted run typically rejects once the timeout wins,
     // and nothing else will ever look at that rejection.

@@ -16,6 +16,7 @@ import type { LearningDecision } from "../domain/schemas.ts";
 import { DatabaseSync } from "node:sqlite";
 import type { Summarizer, SummarizerInput } from "../context/summarizer.ts";
 import { SqliteConversationStore } from "../store/sqlite-conversation-store.ts";
+import type { Router, RouterInput } from "../agents/router.ts";
 
 // --- Test doubles (R-007, FR-022, FR-023) -----------------------------
 //
@@ -147,8 +148,62 @@ function neverResolvingSummarizer(): Summarizer {
   return () => new Promise<string>(() => {});
 }
 
+// --- 012-unified-graph: test doubles for the router seam ---
+//
+// `withServer` defaults `router` to `fixedRouter("react", "dublê")` (R-016,
+// same role `echoSummarizer` plays for 011): a deterministic, offline fake
+// that never reaches `createModelRouter()` — the real, credential-requiring
+// default. It still exercises the real `production-graph.ts` wiring, just
+// without a model call.
+
+/** Always decides the given route (RN2, RN3). Records every input it received. */
+function fixedRouter(route: string, reason: string): { router: Router; calls: RouterInput[] } {
+  const calls: RouterInput[] = [];
+  const router: Router = async (input) => {
+    calls.push(input);
+    return { route, reason };
+  };
+  return { router, calls };
+}
+
+/** A router that always rejects — for the fallback scenario (RN4, SC-003). */
+function rejectingRouter(error: unknown = new Error("falha do roteador")): Router {
+  return async () => {
+    throw error;
+  };
+}
+
+/** A router that returns a value that fails `routeDecisionSchema` — for the fallback scenario (RN4). */
+function invalidRouter(value: unknown): Router {
+  return async () => value;
+}
+
+/** A router that never resolves — for the routing timeout scenario. */
+function neverResolvingRouter(): Router {
+  return () => new Promise<unknown>(() => {});
+}
+
+/**
+ * Strips the fields the production graph adds to every trace event
+ * (`route` events, and `nodeName` on every event) so assertions written
+ * before 012-unified-graph about the STRATEGY's own trace stay readable
+ * (research R-016). Never used to assert on the graph's own behavior —
+ * those tests read `route`/`nodeName` directly.
+ */
+function stripGraphFields(trace: StrategyResult["trace"]): unknown[] {
+  return trace
+    .filter((event) => event.type !== "route")
+    .map(({ nodeName: _nodeName, ...rest }) => rest);
+}
+
 async function withServer<T>(deps: ChatAppDeps, fn: (baseUrl: string) => Promise<T>): Promise<T> {
-  const app = createApp({ distiller: noLearningDistiller, onLearning: () => {}, summarizer: echoSummarizer, ...deps });
+  const app = createApp({
+    distiller: noLearningDistiller,
+    onLearning: () => {},
+    summarizer: echoSummarizer,
+    router: fixedRouter("react", "dublê").router,
+    ...deps,
+  });
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const { port } = server.address() as AddressInfo;
@@ -179,7 +234,7 @@ function jsonOf(res: Response): Promise<any> {
 // --- User Story 1: caminho feliz ---------------------------------------
 
 describe("POST /chat — User Story 1 (caminho feliz)", () => {
-  it("responde 200 com o StrategyResult intacto e resolveStrategy recebeu name indefinido (FR-003, FR-004, FR-006, FR-007)", async () => {
+  it("responde 200 com o StrategyResult intacto e resolveStrategy recebeu a seleção da rota decidida (FR-003, FR-004, FR-006, FR-007; 012, CH4)", async () => {
     const result = fixedResult();
     const strategy = fakeStrategy("react", async () => result);
     const { resolveStrategy, calls } = recordingResolveStrategy(strategy);
@@ -190,8 +245,11 @@ describe("POST /chat — User Story 1 (caminho feliz)", () => {
       const body = await jsonOf(res);
       // 007-persistent-conversation: conversationId and metrics.historyMessages
       // are additions on top of the intact StrategyResult (FR-011, FR-022).
+      // 012-unified-graph: the trace now also carries the `route` event and
+      // `nodeName` on every event (stripped here so this assertion still
+      // reads only the strategy's own trace, byte-for-byte — research R-016).
       assert.deepEqual(body.answer, result.answer);
-      assert.deepEqual(body.trace, FIXED_TRACE); // mesma ordem, nada filtrado
+      assert.deepEqual(stripGraphFields(body.trace), FIXED_TRACE); // mesma ordem, nada filtrado
       assert.equal(body.stoppedReason, "completed");
       assert.equal(body.metrics.llmCalls, result.metrics.llmCalls);
       assert.equal(body.metrics.historyMessages, 0);
@@ -199,8 +257,11 @@ describe("POST /chat — User Story 1 (caminho feliz)", () => {
       assert.ok(body.conversationId.length > 0);
     });
 
+    // Sem `strategy` e sem `reflect`, o pedido é roteado (default `withServer`:
+    // fixedRouter("react", …)) — `resolveStrategy` recebe a seleção da rota
+    // decidida, não mais um `name` indefinido (research R-016).
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.name, undefined);
+    assert.equal(calls[0]?.name, "react");
     assert.equal(calls[0]?.reflect, false);
   });
 
@@ -240,15 +301,20 @@ describe("POST /chat — User Story 2 (estratégia e reflect)", () => {
     assert.equal(calls[0]?.reflect, true);
   });
 
-  it("omitir strategy e reflect chega ao registry como name indefinido e reflect false (FR-007, FR-008)", async () => {
+  it("omitir strategy e reflect roteia o pedido, sem chegar ao registry como override (FR-007, FR-008; 012, CH3, CH4)", async () => {
     const strategy = fakeStrategy("react", async () => fixedResult());
     const { resolveStrategy, calls } = recordingResolveStrategy(strategy);
+    const { router, calls: routerCalls } = fixedRouter("plan-and-execute", "várias etapas dependentes");
 
-    await withServer({ resolveStrategy }, async (baseUrl) => {
+    await withServer({ resolveStrategy, router }, async (baseUrl) => {
       await postChat(baseUrl, { message: "oi" });
     });
 
-    assert.equal(calls[0]?.name, undefined);
+    // Roteado pelo `router` falso, não imposto pelo pedido: `resolveStrategy`
+    // recebe a seleção da rota decidida (research R-016), e o roteador foi
+    // consultado exatamente uma vez (CH3).
+    assert.equal(routerCalls.length, 1);
+    assert.equal(calls[0]?.name, "plan-and-execute");
     assert.equal(calls[0]?.reflect, false);
   });
 
@@ -1634,8 +1700,13 @@ describe("POST /chat — evento summarize (011, US3)", () => {
       const body1 = await jsonOf(res1);
       assert.equal(body1.trace[0].type, "summarize");
       assert.equal(body1.trace[0].absorbedMessages, 8);
-      assert.equal(body1.trace.length, FIXED_TRACE.length + 1);
-      assert.deepEqual(body1.trace.slice(1), FIXED_TRACE);
+      // 012-unified-graph: `route` segue o `summarize`, antes da estratégia
+      // (CH1). O rastro cresce em dois eventos, não um; `stripGraphFields`
+      // devolve só summarize + o rastro da estratégia, na mesma forma que
+      // este teste conferia antes desta feature (research R-016).
+      assert.equal(body1.trace[1].type, "route");
+      assert.equal(body1.trace.length, FIXED_TRACE.length + 2);
+      assert.deepEqual(stripGraphFields(body1.trace).slice(1), FIXED_TRACE);
       assert.equal(body1.trace.filter((e: { type: string }) => e.type === "summarize").length, 1);
 
       const res2 = await postChat(baseUrl, { message: "pergunta seguinte", conversationId });
@@ -1673,7 +1744,221 @@ describe("POST /chat — evento summarize (011, US3)", () => {
     await withServer({ resolveStrategy, conversationStore, summarizer }, async (baseUrl) => {
       const res = await postChat(baseUrl, { message: "pergunta nova", conversationId });
       const body = await jsonOf(res);
-      assert.deepEqual(body.trace, FIXED_TRACE);
+      assert.ok(!body.trace.some((e: { type: string }) => e.type === "summarize"));
+      assert.deepEqual(stripGraphFields(body.trace), FIXED_TRACE);
+    });
+  });
+});
+
+// --- 012-unified-graph: User Story 1 (roteamento real) ---------------------
+
+describe("POST /chat — 012 US1 (roteamento)", () => {
+  const routeToSelection: Record<string, { name: string; reflect: boolean }> = {
+    react: { name: "react", reflect: false },
+    "plan-and-execute": { name: "plan-and-execute", reflect: false },
+    reflect: { name: "react", reflect: true },
+  };
+
+  it("para cada rota decidida, resolveStrategy recebe a seleção correspondente e o route traz rota/strategy/reason/source (CH4)", async () => {
+    for (const route of ["react", "plan-and-execute", "reflect"] as const) {
+      const strategy = fakeStrategy(route, async () => fixedResult());
+      const { resolveStrategy, calls } = recordingResolveStrategy(strategy);
+      const { router } = fixedRouter(route, `motivo para ${route}`);
+
+      await withServer({ resolveStrategy, router }, async (baseUrl) => {
+        const res = await postChat(baseUrl, { message: "quais alertas estão abertos?" });
+        assert.equal(res.status, 200);
+        const body = await jsonOf(res);
+        const routeEvent = body.trace.find((e: { type: string }) => e.type === "route");
+        assert.equal(routeEvent.route, route);
+        assert.equal(routeEvent.strategy, route === "reflect" ? "reflect:react" : route);
+        assert.equal(routeEvent.reason, `motivo para ${route}`);
+        assert.equal(routeEvent.source, "router");
+      });
+
+      assert.deepEqual(calls[0], routeToSelection[route]);
+    }
+  });
+
+  it("com uma conversa de 2 turnos, o roteador recebe as 4 mensagens (acceptance scenario 4 da US1)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const { router, calls: routerCalls } = fixedRouter("react", "dublê");
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = conversationStore.create();
+    conversationStore.append(conversationId, [
+      { role: "user", content: "investigue o checkout" },
+      { role: "assistant", content: "3 alertas encontrados" },
+      { role: "user", content: "e o responsável?" },
+      { role: "assistant", content: "time de pagamentos" },
+    ]);
+
+    await withServer({ resolveStrategy, router, conversationStore }, async (baseUrl) => {
+      await postChat(baseUrl, { message: "ok, abre o incidente então", conversationId });
+    });
+
+    assert.equal(routerCalls.length, 1);
+    const call = routerCalls[0] as { messages: unknown[] };
+    assert.equal(call.messages.length, 4);
+  });
+
+  it("falha, rota inválida ou tempo esgotado do roteador recuam para react, sem erro para o cliente (CH5, SC-003)", async () => {
+    const cases: { label: string; router: Router }[] = [
+      { label: "rejeita", router: rejectingRouter() },
+      { label: "rota inválida", router: invalidRouter({ route: "planner", reason: "x" }) },
+    ];
+
+    for (const { router } of cases) {
+      const strategy = fakeStrategy("react", async () => fixedResult());
+      const { resolveStrategy, calls } = recordingResolveStrategy(strategy);
+
+      await withServer({ resolveStrategy, router }, async (baseUrl) => {
+        const res = await postChat(baseUrl, { message: "oi" });
+        assert.equal(res.status, 200);
+        const body = await jsonOf(res);
+        const routeEvent = body.trace.find((e: { type: string }) => e.type === "route");
+        assert.equal(routeEvent.source, "fallback");
+      });
+
+      assert.deepEqual(calls[0], { name: "react", reflect: false });
+    }
+  });
+
+  it("roteador que nunca resolve estoura o prazo do pedido (504), e o turno não é gravado (CH7)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+
+    await withServer(
+      { resolveStrategy, router: neverResolvingRouter(), routerTimeoutMs: 10_000, timeoutMs: 30, conversationStore },
+      async (baseUrl) => {
+        const res = await postChat(baseUrl, { message: "oi" });
+        assert.equal(res.status, 504);
+      },
+    );
+  });
+
+  it("metrics.llmCalls é o da estratégia falsa, sem contribuição do roteador (CH8)", async () => {
+    const result = fixedResult({ metrics: { llmCalls: 3, latencyMs: 9 } });
+    const strategy = fakeStrategy("react", async () => result);
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.llmCalls, 3);
+    });
+  });
+});
+
+// --- 012-unified-graph: User Story 2 (override) -----------------------------
+
+describe("POST /chat — 012 US2 (override)", () => {
+  it("com strategy, com strategy+reflect e com reflect sozinho, o roteador não é chamado e resolveStrategy recebe a seleção exata do pedido (CH3)", async () => {
+    const cases: { body: Record<string, unknown>; expectedSelection: { name: string | undefined; reflect: boolean } }[] = [
+      { body: { strategy: "plan-and-execute" }, expectedSelection: { name: "plan-and-execute", reflect: false } },
+      { body: { strategy: "plan-and-execute", reflect: true }, expectedSelection: { name: "plan-and-execute", reflect: true } },
+      { body: { reflect: true }, expectedSelection: { name: undefined, reflect: true } },
+    ];
+
+    for (const { body, expectedSelection } of cases) {
+      const strategy = fakeStrategy("react", async () => fixedResult());
+      const { resolveStrategy, calls } = recordingResolveStrategy(strategy);
+      const { router, calls: routerCalls } = fixedRouter("react", "não deveria ser usado");
+
+      await withServer({ resolveStrategy, router }, async (baseUrl) => {
+        const res = await postChat(baseUrl, { message: "oi", ...body });
+        assert.equal(res.status, 200);
+        const responseBody = await jsonOf(res);
+        const routeEvent = responseBody.trace.find((e: { type: string }) => e.type === "route");
+        assert.equal(routeEvent.source, "override");
+      });
+
+      assert.equal(routerCalls.length, 0);
+      assert.deepEqual(calls[0], expectedSelection);
+    }
+  });
+
+  it("reflect: false sozinho (sem strategy) é roteado, não é override (research R-015)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const { router, calls: routerCalls } = fixedRouter("react", "dublê");
+
+    await withServer({ resolveStrategy, router }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi", reflect: false });
+      const body = await jsonOf(res);
+      const routeEvent = body.trace.find((e: { type: string }) => e.type === "route");
+      assert.equal(routeEvent.source, "router");
+    });
+
+    assert.equal(routerCalls.length, 1);
+  });
+
+  it("strategy desconhecida (422) e strategy vazia (400) não consultam roteador nem sumarizador (CH6)", async () => {
+    const unknownResolveStrategy: ResolveStrategy = (selection) => {
+      throw new UnknownStrategyError(selection.name ?? "react", ["react", "plan-and-execute"]);
+    };
+    const { router, calls: routerCalls } = fixedRouter("react", "não deveria ser usado");
+    const { summarizer, calls: summarizerCalls } = recordingSummarizer(() => "não deveria ser chamado");
+
+    await withServer({ resolveStrategy: unknownResolveStrategy, router, summarizer }, async (baseUrl) => {
+      const res422 = await postChat(baseUrl, { message: "oi", strategy: "planner" });
+      assert.equal(res422.status, 422);
+
+      const res400 = await postChat(baseUrl, { message: "oi", strategy: "  " });
+      assert.equal(res400.status, 400);
+    });
+
+    assert.equal(routerCalls.length, 0);
+    assert.equal(summarizerCalls.length, 0);
+  });
+});
+
+// --- 012-unified-graph: User Story 3 (nodeName) -----------------------------
+
+describe("POST /chat — 012 US3 (nodeName)", () => {
+  it("todo evento traz nodeName: route -> router; os da estratégia -> o nó da rota, inclusive critique (CH2)", async () => {
+    const richTrace: StrategyResult["trace"] = [
+      { type: "thought", content: "pensando" },
+      { type: "critique", content: "aprovado: ok" },
+      { type: "answer", content: "resposta final" },
+    ];
+    const strategy = fakeStrategy("reflect:react", async () => fixedResult({ trace: richTrace }));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const { router } = fixedRouter("reflect", "efeito colateral");
+
+    await withServer({ resolveStrategy, router }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "abra um incidente" });
+      const body = await jsonOf(res);
+      assert.ok(body.trace.every((e: { nodeName?: string }) => e.nodeName !== undefined));
+
+      const routeEvent = body.trace.find((e: { type: string }) => e.type === "route");
+      assert.equal(routeEvent.nodeName, "router");
+
+      const strategyEvents = body.trace.filter((e: { type: string }) => e.type !== "route");
+      assert.ok(strategyEvents.every((e: { nodeName: string }) => e.nodeName === "reflect"));
+    });
+  });
+
+  it("com sumarização, summarize traz nodeName context na posição 0 e route na posição 1 (acceptance scenario 2 da US3)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = conversationStore.create();
+    for (let i = 0; i < 8; i += 1) {
+      conversationStore.append(conversationId, [
+        { role: "user", content: `pergunta ${i}` },
+        { role: "assistant", content: `resposta ${i}` },
+      ]);
+    }
+
+    await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "pergunta que resume", conversationId });
+      const body = await jsonOf(res);
+      assert.equal(body.trace[0].type, "summarize");
+      assert.equal(body.trace[0].nodeName, "context");
+      assert.equal(body.trace[1].type, "route");
+      assert.equal(body.trace[1].nodeName, "router");
     });
   });
 });

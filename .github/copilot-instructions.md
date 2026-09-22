@@ -17,6 +17,13 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
   fato com `withStructuredOutput` (`src/memory/distiller.ts`) e barra segredos com uma
   verificação determinística (`src/memory/secret-guard.ts`) antes de guardar. O agente não
   guarda mais fatos — só `forget_preference` (esquecer) continua como ferramenta.
+- `POST /chat` roda cada pedido por um grafo de produção único
+  (`src/agents/production-graph.ts`): `context -> router -> {react, plan-and-execute,
+  reflect} -> response`. Sem `strategy`/`reflect` no pedido, um roteador
+  (`src/agents/router.ts`) escolhe a estratégia com `withStructuredOutput`, guiado por
+  uma tabela de custo/uso no prompt; com `strategy` ou `reflect: true`, a escolha é
+  imposta e o roteador nem é consultado. Todo pedido traz um evento `route` no rastro, e
+  todo evento do rastro traz o nó do grafo que o produziu (`nodeName`).
 
 ## Comandos
 
