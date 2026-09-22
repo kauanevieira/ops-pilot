@@ -1913,3 +1913,52 @@ describe("POST /chat — 012 US2 (override)", () => {
     assert.equal(summarizerCalls.length, 0);
   });
 });
+
+// --- 012-unified-graph: User Story 3 (nodeName) -----------------------------
+
+describe("POST /chat — 012 US3 (nodeName)", () => {
+  it("todo evento traz nodeName: route -> router; os da estratégia -> o nó da rota, inclusive critique (CH2)", async () => {
+    const richTrace: StrategyResult["trace"] = [
+      { type: "thought", content: "pensando" },
+      { type: "critique", content: "aprovado: ok" },
+      { type: "answer", content: "resposta final" },
+    ];
+    const strategy = fakeStrategy("reflect:react", async () => fixedResult({ trace: richTrace }));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const { router } = fixedRouter("reflect", "efeito colateral");
+
+    await withServer({ resolveStrategy, router }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "abra um incidente" });
+      const body = await jsonOf(res);
+      assert.ok(body.trace.every((e: { nodeName?: string }) => e.nodeName !== undefined));
+
+      const routeEvent = body.trace.find((e: { type: string }) => e.type === "route");
+      assert.equal(routeEvent.nodeName, "router");
+
+      const strategyEvents = body.trace.filter((e: { type: string }) => e.type !== "route");
+      assert.ok(strategyEvents.every((e: { nodeName: string }) => e.nodeName === "reflect"));
+    });
+  });
+
+  it("com sumarização, summarize traz nodeName context na posição 0 e route na posição 1 (acceptance scenario 2 da US3)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = conversationStore.create();
+    for (let i = 0; i < 8; i += 1) {
+      conversationStore.append(conversationId, [
+        { role: "user", content: `pergunta ${i}` },
+        { role: "assistant", content: `resposta ${i}` },
+      ]);
+    }
+
+    await withServer({ resolveStrategy, conversationStore }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "pergunta que resume", conversationId });
+      const body = await jsonOf(res);
+      assert.equal(body.trace[0].type, "summarize");
+      assert.equal(body.trace[0].nodeName, "context");
+      assert.equal(body.trace[1].type, "route");
+      assert.equal(body.trace[1].nodeName, "router");
+    });
+  });
+});

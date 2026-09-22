@@ -44,6 +44,38 @@ describe("formatTrace", () => {
     const trace: TraceEvent[] = [{ type: "summarize", content: "R", absorbedMessages: 8 }];
     assert.equal(formatTrace(trace), "[summarize]   (+8 mensagens) R");
   });
+
+  // --- 012-unified-graph: G12, G13 ---------------------------------------
+
+  it("G12: renders a route event with the strategy, its source and the reason", () => {
+    const trace: TraceEvent[] = [
+      { type: "route", route: "plan-and-execute", strategy: "plan-and-execute", reason: "várias etapas dependentes", source: "router" },
+    ];
+    assert.equal(formatTrace(trace), "[route]       plan-and-execute (router) várias etapas dependentes");
+  });
+
+  it("G13: prefixes {nodeName} when an event carries it", () => {
+    const trace: TraceEvent[] = [{ type: "thought", content: "pensando", nodeName: "react" }];
+    assert.equal(formatTrace(trace), "{react} [thought]     pensando");
+  });
+
+  it("G13: an event with no nodeName renders exactly as before this feature (arena/bench/MCP stay unchanged)", () => {
+    const trace: TraceEvent[] = [
+      { type: "thought", content: "vou checar os alertas" },
+      { type: "action", tool: "list_alerts", args: { status: "firing" } },
+      { type: "observation", content: "3 alertas" },
+      { type: "answer", content: "há 3 alertas disparando" },
+    ];
+    assert.equal(
+      formatTrace(trace),
+      [
+        "[thought]     vou checar os alertas",
+        '[action]      list_alerts {"status":"firing"}',
+        "[observation] 3 alertas",
+        "[answer]      há 3 alertas disparando",
+      ].join("\n"),
+    );
+  });
 });
 
 describe("formatMetrics", () => {

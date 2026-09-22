@@ -16,14 +16,23 @@ function formatEvent(event: TraceEvent): string {
       return `[answer]      ${event.content}`;
     case "summarize":
       return `[summarize]   (+${event.absorbedMessages} mensagens) ${event.content}`;
-    // 012-unified-graph: provisional — replaced with its final rendering in T022 (US3).
+    // 012-unified-graph, G12: the strategy actually executed, where the
+    // choice came from, and why.
     case "route":
-      return `[route]       ${event.strategy}`;
+      return `[route]       ${event.strategy} (${event.source}) ${event.reason}`;
   }
 }
 
+/**
+ * 012-unified-graph, G13: prefixes `{nodeName}` when an event carries it —
+ * only events from the production graph (`/chat`) do; the arena, the bench
+ * and the MCP server run a strategy directly and never stamp `nodeName`, so
+ * their lines come out byte-for-byte identical to before this feature.
+ */
 export function formatTrace(trace: readonly TraceEvent[]): string {
-  return trace.map(formatEvent).join("\n");
+  return trace
+    .map((event) => (event.nodeName ? `{${event.nodeName}} ${formatEvent(event)}` : formatEvent(event)))
+    .join("\n");
 }
 
 export function formatMetrics(metrics: RunMetrics, stoppedReason: StoppedReason): string {
