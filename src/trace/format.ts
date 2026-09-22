@@ -16,6 +16,9 @@ function formatEvent(event: TraceEvent): string {
       return `[answer]      ${event.content}`;
     case "summarize":
       return `[summarize]   (+${event.absorbedMessages} mensagens) ${event.content}`;
+    // 012-unified-graph: provisional — replaced with its final rendering in T022 (US3).
+    case "route":
+      return `[route]       ${event.strategy}`;
   }
 }
 

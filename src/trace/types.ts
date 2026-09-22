@@ -1,4 +1,6 @@
-export type TraceEvent =
+import type { NodeName, Route, RouteSource } from "../domain/schemas.ts";
+
+export type TraceEvent = (
   | { type: "thought"; content: string }
   | { type: "action"; tool: string; args: Record<string, unknown> }
   | { type: "observation"; content: string; tool?: string; isError?: boolean }
@@ -14,7 +16,34 @@ export type TraceEvent =
    * summary as saved (after capSummary); `absorbedMessages` is how many
    * pending messages this summarization folded in.
    */
-  | { type: "summarize"; content: string; absorbedMessages: number };
+  | { type: "summarize"; content: string; absorbedMessages: number }
+  /**
+   * 012-unified-graph: produced only by the `router` node of the
+   * production graph (`src/agents/production-graph.ts`), never by a
+   * strategy, the arena, the bench, or the MCP server. Appears exactly
+   * once per `/chat` request, right after `summarize` (if any) and before
+   * every event of the strategy that ran (contracts/production-graph.md,
+   * G4). `route` is the node that ran; `strategy` is the full combination
+   * in the registry's vocabulary (`react`, `plan-and-execute`,
+   * `reflect:react`, `reflect:plan-and-execute`) — needed because `route`
+   * alone can't tell a routed `reflect` from an overridden
+   * `plan-and-execute` with reflection, both of which run on the
+   * `reflect` node. `reason` is already capped (`capReason`) or one of the
+   * fixed override/fallback strings. `source` says who chose: the router
+   * itself, the request's own `strategy`/`reflect` fields (override), or a
+   * recover to `react` after the router failed (fallback).
+   */
+  | { type: "route"; route: Route; strategy: string; reason: string; source: RouteSource }
+) & {
+  /**
+   * 012-unified-graph, R-011: which graph node produced this event.
+   * Optional and additive — stamped only by the production graph that
+   * `/chat` runs through (`stampNode`); every other trace producer (a
+   * strategy run directly, the arena, the bench, the MCP server) leaves it
+   * absent, so their output is byte-for-byte unchanged by this feature.
+   */
+  nodeName?: NodeName;
+};
 
 export interface RunMetrics {
   llmCalls: number;

@@ -8,6 +8,7 @@ import { SqliteMemoryStore } from "./memory/memory-store.ts";
 import { createLocalEmbedder } from "./memory/embeddings.ts";
 import { createModelDistiller } from "./memory/distiller.ts";
 import { createModelSummarizer } from "./context/summarizer.ts";
+import { createModelRouter } from "./agents/router.ts";
 import { baselineState } from "./store/seed.ts";
 
 /**
@@ -61,7 +62,12 @@ function main(): void {
   // recent-window boundary actually invokes it.
   const summarizer = createModelSummarizer();
 
-  const app = createApp({ store, conversationStore, memoryStore, distiller, summarizer });
+  // 012-unified-graph: same pattern as `summarizer` — constructing it reads
+  // no environment variable; only a request without `strategy`/`reflect`
+  // actually invokes it.
+  const router = createModelRouter();
+
+  const app = createApp({ store, conversationStore, memoryStore, distiller, summarizer, router });
 
   app.listen(port, () => {
     console.log(`OpsPilot ouvindo em http://localhost:${port}`);
