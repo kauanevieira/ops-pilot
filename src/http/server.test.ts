@@ -1962,3 +1962,108 @@ describe("POST /chat — 012 US3 (nodeName)", () => {
     });
   });
 });
+
+// --- 013-model-resilience: User Story 2 (modelUsed and the fallback event) ---
+
+describe("POST /chat — 013 US2 (modelUsed, fallback)", () => {
+  it("metrics.modelUsed reaches the response body unchanged from the strategy's own metrics", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult({ metrics: { llmCalls: 2, latencyMs: 5, modelUsed: "primary-model" } }));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.modelUsed, "primary-model");
+    });
+  });
+
+  it("a fallback event in the strategy's own trace reaches the response body", async () => {
+    const trace: StrategyResult["trace"] = [
+      { type: "fallback", from: "primary-model", to: "backup-model", reason: "non_transient" },
+      ...FIXED_TRACE,
+    ];
+    const strategy = fakeStrategy("react", async () => fixedResult({ trace, metrics: { llmCalls: 2, latencyMs: 5, modelUsed: "backup-model" } }));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      const body = await jsonOf(res);
+      const fallbackEvent = body.trace.find((e: { type: string }) => e.type === "fallback");
+      assert.deepEqual(fallbackEvent, { type: "fallback", from: "primary-model", to: "backup-model", reason: "non_transient", nodeName: "react" });
+      assert.equal(body.metrics.modelUsed, "backup-model");
+    });
+  });
+});
+
+// --- 013-model-resilience: User Story 3 (503 model_unavailable) ------------
+
+describe("POST /chat — 013 US3 (model_unavailable)", () => {
+  it("MR4: a strategy that throws ModelUnavailableError responds 503, no details, turn not recorded, learning not triggered", async () => {
+    const { ModelUnavailableError } = await import("../agents/model.ts");
+    const error = new ModelUnavailableError(["primary-model", "backup-model"], "non_transient");
+    const strategy = fakeStrategy("react", async () => {
+      throw error;
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = conversationStore.create();
+    const { onLearning, next } = learningProbe();
+    let learningFired = false;
+    void next.then(() => {
+      learningFired = true;
+    });
+
+    await withServer({ resolveStrategy, conversationStore, onLearning }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi", conversationId, userId: "kauane" });
+      assert.equal(res.status, 503);
+      const body = await jsonOf(res);
+      assert.equal(body.error.code, "model_unavailable");
+      assert.equal("details" in body.error, false);
+      assert.ok(!JSON.stringify(body).includes("primary-model"));
+    });
+
+    assert.equal(conversationStore.countMessages(conversationId), 0);
+    await delay(20);
+    assert.equal(learningFired, false);
+  });
+
+  it("MR5: a plain technical error still responds 500 internal", async () => {
+    const strategy = fakeStrategy("react", async () => {
+      throw new Error("defeito interno qualquer");
+    });
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      assert.equal(res.status, 500);
+      const body = await jsonOf(res);
+      assert.equal(body.error.code, "internal");
+    });
+  });
+
+  it("MR6: a router failure recovers to react (200), never a 503", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const rejectingRouter: Router = async () => {
+      throw new Error("roteador indisponível");
+    };
+
+    await withServer({ resolveStrategy, router: rejectingRouter }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      assert.equal(res.status, 200);
+      const body = await jsonOf(res);
+      const routeEvent = body.trace.find((e: { type: string }) => e.type === "route");
+      assert.equal(routeEvent.source, "fallback");
+    });
+  });
+
+  it("MR5: a strategy that never resolves still times out with 504, not 503", async () => {
+    const strategy = fakeStrategy("react", () => new Promise<StrategyResult>(() => {}));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy, timeoutMs: 30 }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      assert.equal(res.status, 504);
+    });
+  });
+});

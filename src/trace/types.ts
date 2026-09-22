@@ -1,4 +1,4 @@
-import type { NodeName, Route, RouteSource } from "../domain/schemas.ts";
+import type { NodeName, Route, RouteSource, FailureKind } from "../domain/schemas.ts";
 
 export type TraceEvent = (
   | { type: "thought"; content: string }
@@ -34,6 +34,20 @@ export type TraceEvent = (
    * recover to `react` after the router failed (fallback).
    */
   | { type: "route"; route: Route; strategy: string; reason: string; source: RouteSource }
+  /**
+   * 013-model-resilience: produced only by `resilient` (`agents/model.ts`)
+   * switching a call from the primary model to the backup
+   * (`OPENROUTER_MODEL_FALLBACK`) — never by the primary succeeding, even
+   * after a retry (FR-014). At most one per `/chat` request (the switch
+   * sticks for the rest of the request, research R-006, FR-011a); arena
+   * and bench can show more than one, since each call there decides on its
+   * own. `from`/`to` are model ids; `reason` is the primary's own last
+   * failure classification — never the provider's error message (FR-012).
+   * Unrelated to the `route` event's `source: "fallback"` (012): that one
+   * is the router recovering to a different STRATEGY, this one is a
+   * switch of MODEL underneath whichever strategy is already running.
+   */
+  | { type: "fallback"; from: string; to: string; reason: FailureKind }
 ) & {
   /**
    * 012-unified-graph, R-011: which graph node produced this event.
@@ -88,6 +102,15 @@ export interface RunMetrics {
    * (which continues to count only the verbatim messages).
    */
   summaryCoveredMessages?: number;
+  /**
+   * 013-model-resilience: the model id that answered the last call the
+   * strategy made (FR-015) — the one that produced the final answer.
+   * Optional and additive: absent when no call of the strategy's own was
+   * ever completed (e.g. a fake strategy in a test). Producers: react,
+   * plan-and-execute, withReflection (which copies it from the last
+   * attempt, since that attempt's answer is the one returned).
+   */
+  modelUsed?: string;
 }
 
 /**

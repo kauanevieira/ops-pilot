@@ -27,6 +27,9 @@ import {
   OVERRIDE_REASON,
   capReason,
 } from "./router.ts";
+import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
+import { runWithResilienceScope, MODEL_FALLBACK_EVENT } from "./model.ts";
+import type { FailureKind } from "../domain/schemas.ts";
 
 /**
  * Whether a `/chat` request imposes its own strategy instead of being
@@ -90,6 +93,37 @@ export function stampNode(events: readonly TraceEvent[], node: NodeName): TraceE
   return events.map((event) => ({ ...event, nodeName: node }));
 }
 
+/**
+ * 013-model-resilience, research R-007: catches the `model_fallback` custom
+ * callback events dispatched by `resilient` (`agents/model.ts`) from calls
+ * that don't take their own `callbacks` — the router and the summarizer
+ * (`Router`/`Summarizer` are `(input, signal) => ...`, no callbacks
+ * parameter). One instance per `/chat` request, attached to
+ * `graph.invoke`'s own `callbacks`, which LangChain propagates implicitly
+ * to every nested call made during that invocation — verified in a spike:
+ * a call made with an explicit-but-partial config (`{ signal }`, no
+ * `callbacks` key) still reaches a handler attached at the top level.
+ * `drain()` is called once per producing node (`context`, `router`) right
+ * after the call that could have triggered a switch, so each node stamps
+ * only the events its OWN call produced, not ones from a later node.
+ */
+class FallbackRecorder extends BaseCallbackHandler {
+  name = "FallbackRecorder";
+  #events: TraceEvent[] = [];
+
+  override handleCustomEvent(name: string, data: unknown): void {
+    if (name !== MODEL_FALLBACK_EVENT) return;
+    const { from, to, reason } = data as { from: string; to: string; reason: FailureKind };
+    this.#events.push({ type: "fallback", from, to, reason });
+  }
+
+  drain(): TraceEvent[] {
+    const events = this.#events;
+    this.#events = [];
+    return events;
+  }
+}
+
 // --- The graph (research R-001, R-002, R-011 to R-013; contracts/production-graph.md) --------
 
 /** An already-resolved strategy imposed by the request's own `strategy`/`reflect` fields (research R-003). */
@@ -128,6 +162,14 @@ const ProductionGraphState = Annotation.Root({
   conversationId: Annotation<string | undefined>(),
   userId: Annotation<string | undefined>(),
   override: Annotation<OverrideChoice | undefined>(),
+  /**
+   * 013-model-resilience: carried through the state (a live object
+   * reference, not serialized data) so `contextNode`/`routerNode` — defined
+   * once, at `createProductionGraph` construction, not per request — can
+   * reach the SAME recorder instance `run()` created for this one request
+   * and attached to `graph.invoke`'s callbacks.
+   */
+  recorder: Annotation<FallbackRecorder | undefined>(),
   conversationContext: Annotation<ConversationContext>({
     reducer: (_left, right) => right,
     default: () => EMPTY_CONVERSATION_CONTEXT,
@@ -182,7 +224,13 @@ export function createProductionGraph(deps: ProductionGraphDeps): {
         : Promise.resolve(),
     ]);
 
-    const trace = conversationContext.summarizeEvent ? stampNode([conversationContext.summarizeEvent], "context") : [];
+    // 013-model-resilience, FR-013: fallback events from the summarizer's
+    // own call go BEFORE the summarize event, still stamped "context" —
+    // this node's own call is the only thing that could have produced them
+    // since START.
+    const fallbackEvents = state.recorder?.drain() ?? [];
+    const summarizeEvents = conversationContext.summarizeEvent ? [conversationContext.summarizeEvent] : [];
+    const trace = stampNode([...fallbackEvents, ...summarizeEvents], "context");
     return { conversationContext, memories, trace };
   }
 
@@ -248,7 +296,11 @@ export function createProductionGraph(deps: ProductionGraphDeps): {
     }
 
     const label = override ? strategyLabel(override.selection) : strategyLabel(ROUTE_SELECTIONS[route]);
-    const trace = stampNode([{ type: "route", route, strategy: label, reason, source }], "router");
+    // 013-model-resilience, FR-013: fallback events from the router's own
+    // call (empty with `override`, since the router is never called then)
+    // go before the route event, stamped "router".
+    const fallbackEvents = state.recorder?.drain() ?? [];
+    const trace = stampNode([...fallbackEvents, { type: "route", route, strategy: label, reason, source }], "router");
     return { route, strategy, trace };
   }
 
@@ -322,7 +374,16 @@ export function createProductionGraph(deps: ProductionGraphDeps): {
 
   return {
     async run(input: ProductionGraphInput, signal: AbortSignal): Promise<StrategyResult> {
-      const finalState = (await graph.invoke(input, { signal })) as GraphState;
+      // 013-model-resilience: one resilience scope and one FallbackRecorder
+      // per request (research R-006, R-007) — a switch to the backup
+      // sticks for the rest of THIS request only, and the recorder is
+      // attached to `graph.invoke`'s own callbacks so it observes every
+      // nested call made during it, including the router's and the
+      // summarizer's own (neither passes explicit callbacks).
+      const recorder = new FallbackRecorder();
+      const finalState = await runWithResilienceScope(
+        () => graph.invoke({ ...input, recorder }, { signal, callbacks: [recorder] }) as Promise<GraphState>,
+      );
       return finalState.output as StrategyResult;
     },
   };

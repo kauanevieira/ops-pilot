@@ -1,8 +1,10 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { FakeListChatModel } from "@langchain/core/utils/testing";
 import { SUMMARY_MAX_CHARS } from "../domain/schemas.ts";
 import { formatSummarizerInput, capSummary, createModelSummarizer, SUMMARIZER_PROMPT } from "./summarizer.ts";
 import type { ConversationMessage } from "../domain/schemas.ts";
+import type { ModelSource, SourcedModel } from "../agents/model.ts";
 
 function history(...pairs: [ConversationMessage["role"], string][]): ConversationMessage[] {
   return pairs.map(([role, content]) => ({ role, content, createdAt: new Date("2026-01-01T00:00:00.000Z") }));
@@ -20,6 +22,34 @@ describe("createModelSummarizer (Z1)", () => {
 
   it("does not read env vars or build the model when constructed — only when invoked", () => {
     assert.doesNotThrow(() => createModelSummarizer());
+  });
+});
+
+// --- 013-model-resilience (US1): createModelSummarizer survives a primary failure ---
+
+describe("createModelSummarizer — 013-model-resilience (US1)", () => {
+  it("summarizes from the backup when the primary fails with a non-transient error", async () => {
+    class FailingModel extends FakeListChatModel {
+      override async _generate(): Promise<never> {
+        const e = new Error("modelo inexistente") as Error & { status: number };
+        e.status = 404;
+        throw e;
+      }
+    }
+    const primary = new FailingModel({ responses: ["never used"] });
+    const backup = new FakeListChatModel({ responses: ["resumo do reserva"] });
+    const source: ModelSource = {
+      primary: () => ({ id: "primary-model", model: primary }) as SourcedModel,
+      backup: () => ({ id: "backup-model", model: backup }) as SourcedModel,
+    };
+    const summarizer = createModelSummarizer(source);
+
+    const summary = await summarizer(
+      { previousSummary: null, messages: history(["user", "oi"]) },
+      new AbortController().signal,
+    );
+
+    assert.equal(summary, "resumo do reserva");
   });
 });
 

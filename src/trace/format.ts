@@ -20,6 +20,9 @@ function formatEvent(event: TraceEvent): string {
     // choice came from, and why.
     case "route":
       return `[route]       ${event.strategy} (${event.source}) ${event.reason}`;
+    // 013-model-resilience, FR-017.
+    case "fallback":
+      return `[fallback]    ${event.from} -> ${event.to} (${event.reason})`;
   }
 }
 

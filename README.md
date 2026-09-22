@@ -24,10 +24,17 @@ Preencha o `.env`:
 ```
 OPENROUTER_API_KEY=<sua chave>
 OPENROUTER_MODEL=<ex.: openai/gpt-4o-mini>
+
+# Opcional — modelo reserva, usado quando o principal falha
+OPENROUTER_MODEL_FALLBACK=<ex.: openai/gpt-4o-mini>
 ```
 
 `.env` nunca é lido pelo agente de codificação nem commitado — as credenciais
 chegam ao processo via a flag nativa `--env-file-if-exists` do Node.
+
+Sem `OPENROUTER_MODEL_FALLBACK`, o OpsPilot continua funcionando exatamente
+como antes desta variável existir — só o principal é tentado, com novas
+tentativas em falhas passageiras (ver "Resiliência de modelo" abaixo).
 
 Opcionalmente, defina onde o banco SQLite deve viver:
 
@@ -156,6 +163,42 @@ curl -s -X POST http://localhost:3000/chat \
   | jq '.trace[] | select(.type=="route")'
 ```
 
+### Resiliência de modelo
+
+Toda chamada ao modelo — de qualquer estratégia, do crítico, do roteador, do
+sumarizador de histórico e do refletor de aprendizado — passa por uma fábrica
+resiliente. Uma falha passageira do modelo principal (limite de uso, erro do
+provedor, falha de rede) é tentada de novo até 3 vezes; tempo esgotado e
+falhas que não se resolveriam de novo (modelo inexistente, pedido recusado,
+credencial inválida) vão direto ao reserva, se `OPENROUTER_MODEL_FALLBACK`
+estiver configurado. Uma vez que um pedido do `/chat` troca para o reserva,
+o resto **daquele mesmo pedido** vai direto a ele — sem pagar novas
+tentativas e espera no principal a cada chamada seguinte; o próximo pedido
+volta a tentar o principal.
+
+Cada troca de modelo entra no `trace` como um evento `fallback` — `{ from,
+to, reason }`, sem a mensagem do provedor — diferente do evento `route`
+(012), que é o roteador recuando de **estratégia**, não uma troca de
+**modelo**. `metrics.modelUsed` traz o identificador do modelo que produziu
+a resposta final. Nenhum dos dois entra em `llmCalls`/`promptTokens`, que
+continuam medindo só as chamadas concluídas da estratégia (uma tentativa que
+falhou não conta mais — só a que respondeu).
+
+```bash
+curl -s -X POST http://localhost:3000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "quais alertas estão disparando?"}' \
+  | jq '{fallback: [.trace[] | select(.type=="fallback")], modelUsed: .metrics.modelUsed}'
+```
+
+Se nem o principal nem o reserva (ou só o principal, sem reserva configurado)
+atenderem, o `/chat` responde `503` com `error.code: "model_unavailable"`,
+sem detalhe do provedor — distinto do `500 internal`, reservado a um defeito
+do próprio OpsPilot. O roteador e o sumarizador de histórico continuam com a
+falha aberta de sempre (recuam para `react`/seguem sem resumo novo) mesmo
+quando os dois modelos falham; só uma falha que impede a estratégia de
+responder vira 503.
+
 `conversationId` continua uma conversa: as até 8 mensagens mais recentes
 daquela conversa (mensagem de quem pediu + resposta final, alternadas) são
 entregues ao agente na íntegra, antes da mensagem nova. Omitido, uma conversa
@@ -234,10 +277,12 @@ entregue cobre). Com `userId`, `metrics` também traz `recalledMemories`
 e um estimado — nunca reconciliados entre si:
 
 - **`promptTokens`** — real, reportado pelo provedor: soma dos tokens de
-  entrada de toda chamada ao modelo feita naquele pedido (a estratégia base,
-  cada tentativa de reflexão, o crítico). Ausente se alguma dessas chamadas
-  não reportou consumo — nunca uma soma parcial apresentada como total. A
-  chamada que produz o resumo da conversa nunca entra nessa soma.
+  entrada de toda chamada CONCLUÍDA ao modelo feita naquele pedido (a
+  estratégia base, cada tentativa de reflexão, o crítico) — uma tentativa
+  que falhou e foi repetida ou passou para o reserva não entra na soma.
+  Ausente se alguma chamada concluída não reportou consumo — nunca uma soma
+  parcial apresentada como total. A chamada que produz o resumo da conversa
+  e a do roteador nunca entram nessa soma.
 - **`contextBreakdown`** — estimado (caracteres ÷ 4), sempre presente: quanto
   do contexto veio da mensagem, do histórico, do resumo e das memórias
   recuperadas, e o total dessas quatro estimativas. Fica, de propósito, bem
@@ -267,9 +312,10 @@ não reportou. Endereço configurável por `OPSPILOT_URL` (padrão
 | 422 | `unknown_strategy` | `strategy` não é um nome válido — `error.details.validStrategies` lista os aceitos |
 | 404 | `conversation_not_found` | `conversationId` bem formado, mas nenhuma conversa corresponde a ele |
 | 504 | `timeout` | a execução passou de 180s |
+| 503 | `model_unavailable` | nem o principal nem o reserva (ou só o principal, sem reserva) atenderam a estratégia |
 | 500 | `internal` | falha inesperada; nunca vaza detalhe interno |
 
-Um pedido que não conclui com sucesso (400/404/422/504/500) não grava nada
+Um pedido que não conclui com sucesso (400/404/422/503/504/500) não grava nada
 na conversa — nem a mensagem, nem uma conversa nova — e o refletor de
 aprendizado não roda. Uma falha ao recuperar memória (ex.: modelo
 indisponível) não derruba o pedido: ele segue sem fatos recuperados, com
@@ -377,13 +423,15 @@ src/
 ├── agents/    # tool-definitions.ts: fonte única das 6 ferramentas (list_alerts,
 │              # list_incidents, consultar_runbook, open_incident, resolve_incident,
 │              # check_provider_status) — nome, descrição, esquema e execução;
-│              # tools.ts adapta para LangChain; fábrica do modelo, estratégias
-│              # ReAct e Plan-and-Execute, crítico, reflexão (withReflection),
-│              # histórico de conversa (withConversationHistory) e o registry
-│              # (index.ts); router.ts (roteador: withStructuredOutput, tabela
-│              # de estratégias no prompt); production-graph.ts (o grafo do
-│              # /chat: context -> router -> react|plan-and-execute|reflect ->
-│              # response, único consumidor do router e do registry acima)
+│              # tools.ts adapta para LangChain; model.ts (fábrica resiliente:
+│              # resilient() = withRetry no principal + withFallbacks([reserva]),
+│              # classifyModelError, ModelUnavailableError); estratégias ReAct e
+│              # Plan-and-Execute, crítico, reflexão (withReflection), histórico
+│              # de conversa (withConversationHistory) e o registry (index.ts);
+│              # router.ts (roteador: withStructuredOutput, tabela de
+│              # estratégias no prompt); production-graph.ts (o grafo do /chat:
+│              # context -> router -> react|plan-and-execute|reflect -> response,
+│              # único consumidor do router e do registry acima)
 ├── mcp/       # servidor MCP opspilot por stdio: ops-mcp-server.ts (composição
 │              # pura sobre tool-definitions.ts) e server.ts (entrada: env, banco,
 │              # transporte, stderr)
@@ -424,8 +472,9 @@ semântica), [specs/009-learning-reflector/](specs/009-learning-reflector/) (ref
 de aprendizado), [specs/010-context-measurement/](specs/010-context-measurement/)
 (medição de contexto),
 [specs/011-history-summarization/](specs/011-history-summarization/) (sumarização
-de histórico) e [specs/012-unified-graph/](specs/012-unified-graph/) (grafo
-unificado com roteador).
+de histórico), [specs/012-unified-graph/](specs/012-unified-graph/) (grafo
+unificado com roteador) e [specs/013-model-resilience/](specs/013-model-resilience/)
+(resiliência de modelo: nova tentativa, reserva e 503).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 

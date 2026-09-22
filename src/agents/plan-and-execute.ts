@@ -1,8 +1,8 @@
 import { Annotation, END, START, StateGraph, GraphRecursionError } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
-import { createModel } from "./model.ts";
+import { resilient, envModelSource, type ModelSource } from "./model.ts";
 import { createOpsTools } from "./tools.ts";
-import { LlmCallCounter } from "./llm-counter.ts";
+import { LlmCallCounter, modelUsedField } from "./llm-counter.ts";
 import { promptTokensField } from "../context/tokens.ts";
 import { messagesToTrace } from "../trace/from-messages.ts";
 import type { OpsRepository } from "../store/repository.ts";
@@ -48,6 +48,8 @@ export interface PlanAndExecuteOptions {
    * is exactly what the flag exists to measure.
    */
   disableReplanner?: boolean;
+  /** 013-model-resilience: injectable model source, defaulting to `envModelSource()`. */
+  source?: ModelSource;
 }
 
 export function createPlanAndExecuteStrategy(
@@ -55,23 +57,24 @@ export function createPlanAndExecuteStrategy(
   options: PlanAndExecuteOptions = {},
 ): ReasoningStrategy {
   const disableReplanner = options.disableReplanner ?? false;
+  const source = options.source ?? envModelSource();
 
   return {
     name: "plan-and-execute",
-    async run(input: string, options?: RunOptions): Promise<StrategyResult> {
+    async run(input: string, runOptions?: RunOptions): Promise<StrategyResult> {
       const started = Date.now();
-      const maxIterations = options?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+      const maxIterations = runOptions?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
       const counter = new LlmCallCounter();
       // extraTools (008-semantic-memory, R-011): see react.ts for the rationale.
-      const tools = [...createOpsTools(store), ...(options?.extraTools ?? [])];
+      const tools = [...createOpsTools(store), ...(runOptions?.extraTools ?? [])];
 
       async function planner(state: typeof PEState.State) {
-        const plan = await createModel().withStructuredOutput<Plan>(planSchema).invoke(
+        const plan = await resilient<unknown, Plan>((m) => m.withStructuredOutput<Plan>(planSchema), source).invoke(
           [
             ["system", PLANNER_PROMPT],
             ["user", state.input],
           ],
-          { callbacks: [counter], signal: options?.signal },
+          { callbacks: [counter], signal: runOptions?.signal },
         );
         return {
           plan: plan.steps,
@@ -86,10 +89,12 @@ export function createPlanAndExecuteStrategy(
         }
 
         // Resolves the single step with the ops tools, then pushes it to `done`.
-        const stepAgent = createReactAgent({ llm: createModel(), tools });
+        // `llm` as a function, not a bound model — see react.ts's comment
+        // (013-model-resilience, research R-001) for why.
+        const stepAgent = createReactAgent({ llm: () => resilient((m) => m.bindTools!(tools), source), tools });
         const stepResult = await stepAgent.invoke(
           { messages: [{ role: "user", content: step }] },
-          { recursionLimit: 5, callbacks: [counter], signal: options?.signal },
+          { recursionLimit: 5, callbacks: [counter], signal: runOptions?.signal },
         );
         // messagesToTrace labels the last AI message "answer", which is right
         // for a top-level strategy but wrong here: this is one step's own
@@ -113,7 +118,7 @@ export function createPlanAndExecuteStrategy(
       }
 
       async function replanner(state: typeof PEState.State) {
-        const replan = await createModel().withStructuredOutput<Replan>(replanSchema).invoke(
+        const replan = await resilient<unknown, Replan>((m) => m.withStructuredOutput<Replan>(replanSchema), source).invoke(
           [
             ["system", REPLANNER_PROMPT],
             [
@@ -121,7 +126,7 @@ export function createPlanAndExecuteStrategy(
               JSON.stringify({ input: state.input, done: state.done, plan: state.plan }),
             ],
           ],
-          { callbacks: [counter], signal: options?.signal },
+          { callbacks: [counter], signal: runOptions?.signal },
         );
 
         if (replan.decision === "encerrar") {
@@ -182,7 +187,7 @@ export function createPlanAndExecuteStrategy(
       try {
         const stream = await graph.stream(
           { input },
-          { recursionLimit: toRecursionLimit(maxIterations), streamMode: "values", signal: options?.signal },
+          { recursionLimit: toRecursionLimit(maxIterations), streamMode: "values", signal: runOptions?.signal },
         );
         for await (const chunk of stream) {
           lastState = chunk as typeof PEState.State;
@@ -191,7 +196,10 @@ export function createPlanAndExecuteStrategy(
         if (!(error instanceof GraphRecursionError)) throw error;
       }
 
-      const trace = lastState?.trace ?? [];
+      // 013-model-resilience, FR-013/FR-014/FR-015: fallback events go
+      // before the graph's own trace; modelUsed names the model that
+      // answered the last completed call (planner/executor/replanner).
+      const trace = [...counter.fallbackEvents, ...(lastState?.trace ?? [])];
       const doneCount = lastState?.done.length ?? 0;
       const answer = lastState?.answer ?? "";
       const stoppedReason = answer ? "completed" : doneCount >= MAX_STEPS ? "max-steps" : "max-iterations";
@@ -199,7 +207,12 @@ export function createPlanAndExecuteStrategy(
       return {
         answer,
         trace,
-        metrics: { llmCalls: counter.calls, latencyMs: Date.now() - started, ...promptTokensField(counter.promptTokens) },
+        metrics: {
+          llmCalls: counter.calls,
+          latencyMs: Date.now() - started,
+          ...promptTokensField(counter.promptTokens),
+          ...modelUsedField(counter.modelUsed),
+        },
         stoppedReason,
       };
     },

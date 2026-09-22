@@ -6,6 +6,7 @@ import { withReflection, DEFAULT_MAX_REFLECTIONS } from "./reflection.ts";
 import type { Critic, CritiqueContext } from "./critic.ts";
 import type { ReasoningStrategy, RunOptions } from "./types.ts";
 import type { StrategyResult, TraceEvent } from "../trace/types.ts";
+import { MODEL_FALLBACK_EVENT, MODEL_USED_EVENT } from "./model.ts";
 
 /**
  * `promptTokens` is `undefined` by default (010-context-measurement, R2):
@@ -13,11 +14,16 @@ import type { StrategyResult, TraceEvent } from "../trace/types.ts";
  * result's `promptTokens` key absent, the same way a real attempt with an
  * unreported call would.
  */
-function makeResult(answer: string, trace: TraceEvent[] = [], llmCalls = 1, promptTokens?: number): StrategyResult {
+function makeResult(answer: string, trace: TraceEvent[] = [], llmCalls = 1, promptTokens?: number, modelUsed?: string): StrategyResult {
   return {
     answer,
     trace: [...trace, { type: "answer", content: answer }],
-    metrics: { llmCalls, latencyMs: 5, ...(promptTokens !== undefined && { promptTokens }) },
+    metrics: {
+      llmCalls,
+      latencyMs: 5,
+      ...(promptTokens !== undefined && { promptTokens }),
+      ...(modelUsed !== undefined && { modelUsed }),
+    },
     stoppedReason: "completed",
   };
 }
@@ -29,6 +35,11 @@ function usageResult(inputTokens: number): LLMResult {
       [{ text: "", message: new AIMessage({ content: "", usage_metadata: { input_tokens: inputTokens, output_tokens: 0, total_tokens: inputTokens } }) } as never],
     ],
   };
+}
+
+/** An `LLMResult` that completed without reporting `usage_metadata` (013-model-resilience, research R-010). */
+function noUsageResult(): LLMResult {
+  return { generations: [[{ text: "", message: new AIMessage({ content: "" }) } as never]] };
 }
 
 /**
@@ -71,7 +82,14 @@ function throwingCritic(): Critic {
   };
 }
 
-/** A critic that starts a chat-model call (counted) and then fails before it ends without usage (R3). */
+/**
+ * A critic that starts a chat-model call and then fails BEFORE it
+ * completes — `handleLLMEnd` never fires (013-model-resilience, research
+ * R-010: `LlmCallCounter` now counts on `handleLLMEnd`, so a call that
+ * never reaches it never counts at all, and can no longer make
+ * `promptTokens` absent — that's the whole point of the change: a
+ * retried/replaced attempt must not inflate `llmCalls`).
+ */
 function throwingCriticAfterStart(): Critic {
   return async (_context, callbacks) => {
     for (const handler of callbacks) {
@@ -86,10 +104,13 @@ function throwingCriticAfterStart(): Critic {
  * `state` is returned by reference (not destructured), so callers read the
  * live count after `run()` resolves, instead of a snapshot taken early.
  *
- * `promptTokens`, when given, makes the fake also fire `handleLLMEnd` with
- * that usage after `handleChatModelStart` (010-context-measurement, R1) —
- * simulating a real critic call that reported (or, if omitted, never
- * reported) its input tokens, one entry per verdict.
+ * Always fires `handleLLMEnd` — a real critic call always completes one
+ * way or another (013-model-resilience, research R-010: only completed
+ * calls count). `promptTokens`, when given, makes that `handleLLMEnd`
+ * report usage (010-context-measurement, R1); omitted, it completes
+ * WITHOUT usage — simulating a real call whose provider didn't report
+ * consumption, which still counts in `llmCalls` but makes `promptTokens`
+ * absent (R2).
  */
 function countingCritic(
   verdicts: { approved: boolean; feedback: string; promptTokens?: number }[],
@@ -102,7 +123,7 @@ function countingCritic(
     for (const handler of callbacks) {
       const h = handler as { handleChatModelStart?: () => void; handleLLMEnd?: (result: LLMResult) => void };
       h.handleChatModelStart?.();
-      if (verdict.promptTokens !== undefined) h.handleLLMEnd?.(usageResult(verdict.promptTokens));
+      h.handleLLMEnd?.(verdict.promptTokens !== undefined ? usageResult(verdict.promptTokens) : noUsageResult());
     }
     return verdict;
   };
@@ -329,13 +350,16 @@ describe("withReflection", () => {
       assert.equal("promptTokens" in result.metrics, false);
     });
 
-    it("leaves promptTokens absent when the critic started a call and then failed (R3)", async () => {
+    it("keeps the attempt's own promptTokens when the critic started a call and then failed before completing (R3, revised by 013-model-resilience research R-010)", async () => {
       const base = fakeStrategy("base", [makeResult("r1", [], 1, 100)]);
       const decorated = withReflection(base, { critic: throwingCriticAfterStart() });
 
       const result = await decorated.run("pedido");
 
-      assert.equal("promptTokens" in result.metrics, false);
+      // The critic's own call never reached `handleLLMEnd`, so it never
+      // counted at all (research R-010) — it can no longer poison the
+      // sum the way an "unreported" call used to.
+      assert.equal(result.metrics.promptTokens, 100);
     });
 
     it("maxReflections: 0 returns the attempt's own promptTokens untouched", async () => {
@@ -346,6 +370,56 @@ describe("withReflection", () => {
       const result = await decorated.run("pedido");
 
       assert.equal(result.metrics.promptTokens, 100);
+    });
+  });
+
+  // --- 013-model-resilience (US2): modelUsed and the critic's own fallback events ---
+
+  describe("modelUsed and fallback events (013-model-resilience, US2)", () => {
+    it("modelUsed is copied from the last attempt, in all four return points", async () => {
+      // Approval on the first critique — the "verdict.approved" return point.
+      const approved = fakeStrategy("base", [makeResult("r1", [], 1, undefined, "primary-model")]);
+      const resultApproved = await withReflection(approved, { critic: alwaysApproves() }).run("pedido");
+      assert.equal(resultApproved.metrics.modelUsed, "primary-model");
+
+      // Regeneration exhausts maxReflections — the final return point, after the loop.
+      const exhausted = fakeStrategy("base", [
+        makeResult("r1", [], 1, undefined, "primary-model"),
+        makeResult("r2", [], 1, undefined, "backup-model"),
+      ]);
+      const resultExhausted = await withReflection(exhausted, { maxReflections: 1, critic: alwaysRejects() }).run("pedido");
+      assert.equal(resultExhausted.metrics.modelUsed, "backup-model");
+
+      // maxReflections: 0 — the short-circuit return point, before the loop.
+      const shortCircuit = fakeStrategy("base", [makeResult("r1", [], 1, undefined, "primary-model")]);
+      const resultShortCircuit = await withReflection(shortCircuit, { maxReflections: 0 }).run("pedido");
+      assert.equal(resultShortCircuit.metrics.modelUsed, "primary-model");
+    });
+
+    it("a critic call that switches models produces a fallback event right before its own critique", async () => {
+      const base = fakeStrategy("base", [makeResult("r1")]);
+      const fallingBackCritic: Critic = async (_context, callbacks) => {
+        for (const handler of callbacks) {
+          const h = handler as { handleCustomEvent?: (name: string, data: unknown) => void };
+          h.handleCustomEvent?.(MODEL_FALLBACK_EVENT, { from: "primary-model", to: "backup-model", reason: "non_transient" });
+          h.handleCustomEvent?.(MODEL_USED_EVENT, { model: "backup-model" });
+        }
+        return { approved: true, feedback: "ok" };
+      };
+      const decorated = withReflection(base, { critic: fallingBackCritic });
+
+      const result = await decorated.run("pedido");
+
+      const fallbackIndex = result.trace.findIndex((e) => e.type === "fallback");
+      const critiqueIndex = result.trace.findIndex((e) => e.type === "critique");
+      assert.ok(fallbackIndex >= 0 && critiqueIndex >= 0);
+      assert.ok(fallbackIndex < critiqueIndex);
+      assert.deepEqual(result.trace[fallbackIndex], {
+        type: "fallback",
+        from: "primary-model",
+        to: "backup-model",
+        reason: "non_transient",
+      });
     });
   });
 });

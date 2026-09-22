@@ -1,8 +1,10 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { FakeListChatModel } from "@langchain/core/utils/testing";
 import { capReason, ROUTE_REASON_MAX_CHARS, ROUTER_PROMPT, formatRouterInput, createModelRouter } from "./router.ts";
 import { routeSchema } from "../domain/schemas.ts";
 import type { ConversationMessage } from "../domain/schemas.ts";
+import type { ModelSource, SourcedModel } from "./model.ts";
 
 // RT5: capReason trims and truncates at ROUTE_REASON_MAX_CHARS, never rejects.
 describe("capReason", () => {
@@ -98,5 +100,30 @@ describe("createModelRouter", () => {
 
   it("does not read env vars or build the model when constructed — only when invoked", () => {
     assert.doesNotThrow(() => createModelRouter());
+  });
+});
+
+// --- 013-model-resilience (US1): createModelRouter survives a primary failure ---
+
+describe("createModelRouter — 013-model-resilience (US1)", () => {
+  it("decides from the backup when the primary fails with a non-transient error", async () => {
+    class FailingModel extends FakeListChatModel {
+      override async _generate(): Promise<never> {
+        const e = new Error("modelo inexistente") as Error & { status: number };
+        e.status = 404;
+        throw e;
+      }
+    }
+    const primary = new FailingModel({ responses: ["never used"] });
+    const backup = new FakeListChatModel({ responses: ['{"route": "react", "reason": "consulta direta"}'] });
+    const source: ModelSource = {
+      primary: () => ({ id: "primary-model", model: primary }) as SourcedModel,
+      backup: () => ({ id: "backup-model", model: backup }) as SourcedModel,
+    };
+    const router = createModelRouter(source);
+
+    const decision = await router({ message: "quais alertas estão abertos?", summary: null, messages: [] }, new AbortController().signal);
+
+    assert.deepEqual(decision, { route: "react", reason: "consulta direta" });
   });
 });

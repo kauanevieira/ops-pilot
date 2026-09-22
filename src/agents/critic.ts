@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { BaseCallbackHandler } from "@langchain/core/callbacks/base";
-import { createModel } from "./model.ts";
+import { resilient, envModelSource, type ModelSource } from "./model.ts";
 import type { StrategyResult } from "../trace/types.ts";
 
 /** Structured output for the critic (FR-009, R-003). */
@@ -91,24 +91,24 @@ function formatActions(actions: CritiqueContext["actions"]): string {
  * config of its own (FR-007), judging with structured output (R-003). No
  * tools, no store access — it judges only with what's in the context
  * (assumption). `callbacks` is forwarded to `.invoke` so the caller can
- * attribute this call to its own metrics (FR-022, R-008).
+ * attribute this call to its own metrics (FR-022, R-008) — including the
+ * `model_used`/`fallback` events `resilient` dispatches
+ * (013-model-resilience, contracts/model-factory.md).
  */
-export function createLlmCritic(): Critic {
+export function createLlmCritic(source: ModelSource = envModelSource()): Critic {
   return async (context, callbacks) => {
-    return createModel()
-      .withStructuredOutput<Critique>(critiqueSchema)
-      .invoke(
+    return resilient<unknown, Critique>((m) => m.withStructuredOutput<Critique>(critiqueSchema), source).invoke(
+      [
+        ["system", CRITIC_PROMPT],
         [
-          ["system", CRITIC_PROMPT],
-          [
-            "user",
-            `Pedido: ${context.input}\n` +
-              `Ações executadas:\n${formatActions(context.actions)}\n` +
-              `Observações:\n${formatObservations(context.observations)}\n` +
-              `Resposta: ${context.answer}`,
-          ],
+          "user",
+          `Pedido: ${context.input}\n` +
+            `Ações executadas:\n${formatActions(context.actions)}\n` +
+            `Observações:\n${formatObservations(context.observations)}\n` +
+            `Resposta: ${context.answer}`,
         ],
-        { callbacks },
-      );
+      ],
+      { callbacks },
+    );
   };
 }

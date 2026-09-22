@@ -189,3 +189,27 @@ export type RouteSource = z.infer<typeof routeSourceSchema>;
 /** The production graph's nodes (FR-020) — the closed set `TraceEvent.nodeName` accepts. */
 export const nodeNameSchema = z.enum(["context", "router", "react", "plan-and-execute", "reflect", "response"]);
 export type NodeName = z.infer<typeof nodeNameSchema>;
+
+// --- 013-model-resilience ------------------------------------------------
+
+/**
+ * Why the primary model didn't answer a call (FR-012). Decides whether the
+ * call is retried (`RETRYABLE_FAILURES` below) and appears, unchanged, in
+ * the `fallback` trace event — never the provider's own error message.
+ */
+export const failureKindSchema = z.enum(["timeout", "rate_limit", "provider_error", "network", "non_transient"]);
+export type FailureKind = z.infer<typeof failureKindSchema>;
+
+/**
+ * The subset of `FailureKind` that earns a retry on the primary (FR-005,
+ * research R-004). `timeout` is deliberately NOT here: a single attempt
+ * can already take up to 60s (`model.ts`'s client timeout), so three
+ * attempts could consume most of the request's 180s deadline — a timeout
+ * goes straight to the backup instead. `non_transient` covers everything
+ * that would just fail the same way again (unknown model, rejected
+ * request, invalid credential, malformed structured output).
+ */
+export const RETRYABLE_FAILURES: ReadonlySet<FailureKind> = new Set(["rate_limit", "provider_error", "network"]);
+
+/** Validates `OPENROUTER_MODEL`/`OPENROUTER_MODEL_FALLBACK` when read (Constitution, boundary validation). */
+export const modelIdSchema = z.string().trim().min(1);

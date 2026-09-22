@@ -2,7 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { AIMessage } from "@langchain/core/messages";
 import type { LLMResult } from "@langchain/core/outputs";
-import { LlmCallCounter } from "./llm-counter.ts";
+import { LlmCallCounter, modelUsedField } from "./llm-counter.ts";
+import { MODEL_USED_EVENT, MODEL_FALLBACK_EVENT } from "./model.ts";
 
 function resultWithUsage(inputTokens: number): LLMResult {
   return {
@@ -17,10 +18,16 @@ function resultWithoutUsage(): LLMResult {
 }
 
 describe("LlmCallCounter", () => {
-  it("keeps counting handleChatModelStart the same way (K1)", () => {
+  // 013-model-resilience, research R-010 (emends 010, K1): calls counts
+  // COMPLETED calls (handleLLMEnd), not started ones — a retried/replaced
+  // attempt that never completes must not inflate llmCalls.
+  it("handleChatModelStart alone does not count; handleLLMEnd does (K1)", () => {
     const counter = new LlmCallCounter();
     counter.handleChatModelStart();
     counter.handleChatModelStart();
+    assert.equal(counter.calls, 0);
+    counter.handleLLMEnd(resultWithUsage(10));
+    counter.handleLLMEnd(resultWithUsage(20));
     assert.equal(counter.calls, 2);
   });
 
@@ -34,18 +41,23 @@ describe("LlmCallCounter", () => {
     assert.equal(counter.promptTokens, 600);
   });
 
-  it("is undefined when a started call never ends with usage (K3)", () => {
+  // 013-model-resilience, R-010: a call that never reaches handleLLMEnd
+  // (e.g. it failed and only handleLLMError fired) simply never counts —
+  // it can no longer make promptTokens undefined, because it was never
+  // counted in `calls` to begin with (FR-024).
+  it("a call that never ends (e.g. it failed) does not count and does not affect promptTokens (K3)", () => {
     const counter = new LlmCallCounter();
     counter.handleChatModelStart();
     counter.handleLLMEnd(resultWithUsage(100));
     counter.handleChatModelStart(); // started, never ends (e.g. handleLLMError instead)
-    assert.equal(counter.promptTokens, undefined);
+    assert.equal(counter.calls, 1);
+    assert.equal(counter.promptTokens, 100);
   });
 
-  it("is undefined when a call ends without usage_metadata (K3)", () => {
+  it("is undefined when a COMPLETED call ends without usage_metadata (K3)", () => {
     const counter = new LlmCallCounter();
-    counter.handleChatModelStart();
     counter.handleLLMEnd(resultWithoutUsage());
+    assert.equal(counter.calls, 1);
     assert.equal(counter.promptTokens, undefined);
   });
 
@@ -58,10 +70,38 @@ describe("LlmCallCounter", () => {
   it("does not share state across instances (K5)", () => {
     const a = new LlmCallCounter();
     const b = new LlmCallCounter();
-    a.handleChatModelStart();
     a.handleLLMEnd(resultWithUsage(50));
     assert.equal(a.promptTokens, 50);
     assert.equal(b.calls, 0);
     assert.equal(b.promptTokens, 0);
+  });
+
+  // 013-model-resilience: fallbackEvents/modelUsed, fed by resilient's
+  // custom callback events (research R-007).
+  it("collects fallback events in order and the last model used", () => {
+    const counter = new LlmCallCounter();
+    counter.handleCustomEvent(MODEL_FALLBACK_EVENT, { from: "primary-model", to: "backup-model", reason: "non_transient" });
+    counter.handleCustomEvent(MODEL_USED_EVENT, { model: "backup-model" });
+    assert.deepEqual(counter.fallbackEvents, [
+      { type: "fallback", from: "primary-model", to: "backup-model", reason: "non_transient" },
+    ]);
+    assert.equal(counter.modelUsed, "backup-model");
+  });
+
+  it("ignores unrelated custom events", () => {
+    const counter = new LlmCallCounter();
+    counter.handleCustomEvent("some_other_event", { irrelevant: true });
+    assert.deepEqual(counter.fallbackEvents, []);
+    assert.equal(counter.modelUsed, undefined);
+  });
+});
+
+describe("modelUsedField", () => {
+  it("omits the key when undefined", () => {
+    assert.deepEqual(modelUsedField(undefined), {});
+  });
+
+  it("includes the key when a model id is given", () => {
+    assert.deepEqual(modelUsedField("primary-model"), { modelUsed: "primary-model" });
   });
 });

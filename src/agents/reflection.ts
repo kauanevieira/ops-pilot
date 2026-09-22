@@ -1,4 +1,4 @@
-import { LlmCallCounter } from "./llm-counter.ts";
+import { LlmCallCounter, modelUsedField } from "./llm-counter.ts";
 import { buildCritiqueContext, createLlmCritic, type Critic, type Critique } from "./critic.ts";
 import { promptTokensField, sumPromptTokens } from "../context/tokens.ts";
 import type { ReasoningStrategy, RunOptions } from "./types.ts";
@@ -94,6 +94,17 @@ export function withReflection(strategy: ReasoningStrategy, options?: Reflection
       let promptTokens = attempt.metrics.promptTokens;
       let stoppedReason: StoppedReason = attempt.stoppedReason;
       const critiqueCounter = new LlmCallCounter();
+      // 013-model-resilience, FR-013: `critiqueCounter` is reused across
+      // every reflection (unlike a fresh-per-attempt counter), so its
+      // `fallbackEvents` accumulate over the whole cycle — this tracks how
+      // many have already been placed in `trace`, so each iteration only
+      // adds the ones ITS OWN critic call produced.
+      let fallbackEventsSeen = 0;
+      const newCritiqueFallbackEvents = (): TraceEvent[] => {
+        const events = critiqueCounter.fallbackEvents.slice(fallbackEventsSeen);
+        fallbackEventsSeen = critiqueCounter.fallbackEvents.length;
+        return events;
+      };
 
       for (let reflection = 0; reflection < maxReflections; reflection += 1) {
         let verdict: Critique;
@@ -101,25 +112,37 @@ export function withReflection(strategy: ReasoningStrategy, options?: Reflection
           verdict = await critic(buildCritiqueContext(input, attempt), [critiqueCounter]);
         } catch {
           // FR-017, R-009: falha do crítico é fail-open — entrega a
-          // resposta corrente, nunca propaga como erro de `run`.
-          trace.push(critiqueEvent("indisponível: a revisão falhou e não pôde ser concluída"));
+          // resposta corrente, nunca propaga como erro de `run`. Um
+          // fallback pode ter acontecido antes da falha final do crítico
+          // (013-model-resilience) — ainda assim registrado.
+          trace.push(...newCritiqueFallbackEvents(), critiqueEvent("indisponível: a revisão falhou e não pôde ser concluída"));
           llmCalls += critiqueCounter.calls;
           return {
             answer: attempt.answer,
             trace,
-            metrics: { llmCalls, latencyMs: Date.now() - started, ...promptTokensField(sumPromptTokens(promptTokens, critiqueCounter.promptTokens)) },
+            metrics: {
+              llmCalls,
+              latencyMs: Date.now() - started,
+              ...promptTokensField(sumPromptTokens(promptTokens, critiqueCounter.promptTokens)),
+              ...modelUsedField(attempt.metrics.modelUsed),
+            },
             stoppedReason,
           };
         }
 
-        trace.push(critiqueEvent(`${verdict.approved ? "aprovado" : "reprovado"}: ${verdict.feedback}`));
+        trace.push(...newCritiqueFallbackEvents(), critiqueEvent(`${verdict.approved ? "aprovado" : "reprovado"}: ${verdict.feedback}`));
 
         if (verdict.approved) {
           llmCalls += critiqueCounter.calls;
           return {
             answer: attempt.answer,
             trace,
-            metrics: { llmCalls, latencyMs: Date.now() - started, ...promptTokensField(sumPromptTokens(promptTokens, critiqueCounter.promptTokens)) },
+            metrics: {
+              llmCalls,
+              latencyMs: Date.now() - started,
+              ...promptTokensField(sumPromptTokens(promptTokens, critiqueCounter.promptTokens)),
+              ...modelUsedField(attempt.metrics.modelUsed),
+            },
             stoppedReason,
           };
         }
@@ -133,7 +156,12 @@ export function withReflection(strategy: ReasoningStrategy, options?: Reflection
           return {
             answer: attempt.answer,
             trace,
-            metrics: { llmCalls, latencyMs: Date.now() - started, ...promptTokensField(sumPromptTokens(promptTokens, critiqueCounter.promptTokens)) },
+            metrics: {
+              llmCalls,
+              latencyMs: Date.now() - started,
+              ...promptTokensField(sumPromptTokens(promptTokens, critiqueCounter.promptTokens)),
+              ...modelUsedField(attempt.metrics.modelUsed),
+            },
             stoppedReason,
           };
         }
@@ -153,7 +181,12 @@ export function withReflection(strategy: ReasoningStrategy, options?: Reflection
       return {
         answer: attempt.answer,
         trace,
-        metrics: { llmCalls, latencyMs: Date.now() - started, ...promptTokensField(sumPromptTokens(promptTokens, critiqueCounter.promptTokens)) },
+        metrics: {
+          llmCalls,
+          latencyMs: Date.now() - started,
+          ...promptTokensField(sumPromptTokens(promptTokens, critiqueCounter.promptTokens)),
+          ...modelUsedField(attempt.metrics.modelUsed),
+        },
         stoppedReason,
       };
     },

@@ -24,6 +24,12 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
   uma tabela de custo/uso no prompt; com `strategy` ou `reflect: true`, a escolha é
   imposta e o roteador nem é consultado. Todo pedido traz um evento `route` no rastro, e
   todo evento do rastro traz o nó do grafo que o produziu (`nodeName`).
+- Toda chamada ao modelo (estratégias, crítico, roteador, sumarizador, refletor de
+  aprendizado) passa por `resilient()` (`src/agents/model.ts`): `withRetry` no principal
+  (até 3 tentativas, só em falha passageira) e `withFallbacks` para um reserva opcional
+  (`OPENROUTER_MODEL_FALLBACK`). Uma troca vale para o resto do mesmo pedido do `/chat`
+  (`runWithResilienceScope`). Rastro ganha o evento `fallback`; métricas ganham
+  `modelUsed`. Sem nenhum modelo disponível, o `/chat` responde 503 `model_unavailable`.
 
 ## Comandos
 
