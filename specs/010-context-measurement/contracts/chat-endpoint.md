@@ -6,6 +6,13 @@
 > uma quinta chave, `summary` — `total` passa a somar quatro estimativas, não três.
 > `history` continua cobrindo só as mensagens entregues na íntegra. Ver
 > [`specs/011-history-summarization/contracts/chat-endpoint.md`](../../011-history-summarization/contracts/chat-endpoint.md).
+>
+> **Emendado também por `013-model-resilience`**: `llmCalls` passa a contar só chamadas
+> CONCLUÍDAS (uma tentativa que falhou e foi repetida, ou substituída pelo reserva, não
+> conta mais). `promptTokens` continua ausente se alguma chamada concluída não reportou
+> consumo, mas uma chamada que nunca chegou a concluir não torna mais o total ausente —
+> ela simplesmente não é contada. Sem falha de modelo, os números não mudam. Ver
+> [`specs/013-model-resilience/contracts/model-factory.md`](../../013-model-resilience/contracts/model-factory.md).
 
 Emenda [`003-chat-http-api/contracts/chat-endpoint.md`](../../003-chat-http-api/contracts/chat-endpoint.md),
 já emendado pela 007, 008 e 009. **Corpo da requisição e corpos de erro não mudam.** No 200,

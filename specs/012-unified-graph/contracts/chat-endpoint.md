@@ -2,6 +2,14 @@
 
 **Feature**: `012-unified-graph` | Satisfaz FR-001, FR-005, FR-014 a FR-025
 
+> **Emendado também por `013-model-resilience`**: o roteador (nó `router`) e o
+> sumarizador (nó `context`) ganham nova tentativa e reserva de modelo, como toda
+> chamada ao modelo. Uma troca produz um evento `fallback`, distinto do `route` com
+> `source: "fallback"` deste documento (aquele é recuo de ESTRATÉGIA; este é troca de
+> MODELO), posicionado antes do `summarize`/`route` do nó em que aconteceu. Nada aqui
+> muda. Ver
+> [`specs/013-model-resilience/contracts/chat-endpoint.md`](../../013-model-resilience/contracts/chat-endpoint.md).
+
 Emenda [`003-chat-http-api/contracts/chat-endpoint.md`](../../003-chat-http-api/contracts/chat-endpoint.md),
 já emendado pela 007 a 011. **O corpo da requisição e os corpos de erro não mudam.**
 

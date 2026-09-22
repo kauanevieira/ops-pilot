@@ -40,6 +40,14 @@
 > evento `route` (sempre presente, logo depois do `summarize` quando houver) e todo
 > evento do rastro ganha `nodeName`. Corpo da requisição e corpos de erro não mudam. Ver
 > [`specs/012-unified-graph/contracts/chat-endpoint.md`](../../012-unified-graph/contracts/chat-endpoint.md).
+>
+> **Emendado também por `013-model-resilience`**: toda chamada ao modelo ganha nova
+> tentativa em falha passageira e, esgotada, troca para um modelo reserva opcional
+> (`OPENROUTER_MODEL_FALLBACK`). `trace` pode ganhar um evento `fallback`, e `metrics`
+> ganha `modelUsed`. Uma nova resposta **503** `model_unavailable` aparece quando nenhum
+> modelo atende a estratégia — distinta do `500 internal` já existente. Corpo da
+> requisição não muda. Ver
+> [`specs/013-model-resilience/contracts/chat-endpoint.md`](../../013-model-resilience/contracts/chat-endpoint.md).
 
 O único endpoint da feature. Recebe um pedido em linguagem natural, executa uma estratégia
 de raciocínio e devolve o resultado da execução.
