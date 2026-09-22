@@ -6,6 +6,7 @@ import { withReflection, DEFAULT_MAX_REFLECTIONS } from "./reflection.ts";
 import type { Critic, CritiqueContext } from "./critic.ts";
 import type { ReasoningStrategy, RunOptions } from "./types.ts";
 import type { StrategyResult, TraceEvent } from "../trace/types.ts";
+import { MODEL_FALLBACK_EVENT, MODEL_USED_EVENT } from "./model.ts";
 
 /**
  * `promptTokens` is `undefined` by default (010-context-measurement, R2):
@@ -13,11 +14,16 @@ import type { StrategyResult, TraceEvent } from "../trace/types.ts";
  * result's `promptTokens` key absent, the same way a real attempt with an
  * unreported call would.
  */
-function makeResult(answer: string, trace: TraceEvent[] = [], llmCalls = 1, promptTokens?: number): StrategyResult {
+function makeResult(answer: string, trace: TraceEvent[] = [], llmCalls = 1, promptTokens?: number, modelUsed?: string): StrategyResult {
   return {
     answer,
     trace: [...trace, { type: "answer", content: answer }],
-    metrics: { llmCalls, latencyMs: 5, ...(promptTokens !== undefined && { promptTokens }) },
+    metrics: {
+      llmCalls,
+      latencyMs: 5,
+      ...(promptTokens !== undefined && { promptTokens }),
+      ...(modelUsed !== undefined && { modelUsed }),
+    },
     stoppedReason: "completed",
   };
 }
@@ -364,6 +370,56 @@ describe("withReflection", () => {
       const result = await decorated.run("pedido");
 
       assert.equal(result.metrics.promptTokens, 100);
+    });
+  });
+
+  // --- 013-model-resilience (US2): modelUsed and the critic's own fallback events ---
+
+  describe("modelUsed and fallback events (013-model-resilience, US2)", () => {
+    it("modelUsed is copied from the last attempt, in all four return points", async () => {
+      // Approval on the first critique — the "verdict.approved" return point.
+      const approved = fakeStrategy("base", [makeResult("r1", [], 1, undefined, "primary-model")]);
+      const resultApproved = await withReflection(approved, { critic: alwaysApproves() }).run("pedido");
+      assert.equal(resultApproved.metrics.modelUsed, "primary-model");
+
+      // Regeneration exhausts maxReflections — the final return point, after the loop.
+      const exhausted = fakeStrategy("base", [
+        makeResult("r1", [], 1, undefined, "primary-model"),
+        makeResult("r2", [], 1, undefined, "backup-model"),
+      ]);
+      const resultExhausted = await withReflection(exhausted, { maxReflections: 1, critic: alwaysRejects() }).run("pedido");
+      assert.equal(resultExhausted.metrics.modelUsed, "backup-model");
+
+      // maxReflections: 0 — the short-circuit return point, before the loop.
+      const shortCircuit = fakeStrategy("base", [makeResult("r1", [], 1, undefined, "primary-model")]);
+      const resultShortCircuit = await withReflection(shortCircuit, { maxReflections: 0 }).run("pedido");
+      assert.equal(resultShortCircuit.metrics.modelUsed, "primary-model");
+    });
+
+    it("a critic call that switches models produces a fallback event right before its own critique", async () => {
+      const base = fakeStrategy("base", [makeResult("r1")]);
+      const fallingBackCritic: Critic = async (_context, callbacks) => {
+        for (const handler of callbacks) {
+          const h = handler as { handleCustomEvent?: (name: string, data: unknown) => void };
+          h.handleCustomEvent?.(MODEL_FALLBACK_EVENT, { from: "primary-model", to: "backup-model", reason: "non_transient" });
+          h.handleCustomEvent?.(MODEL_USED_EVENT, { model: "backup-model" });
+        }
+        return { approved: true, feedback: "ok" };
+      };
+      const decorated = withReflection(base, { critic: fallingBackCritic });
+
+      const result = await decorated.run("pedido");
+
+      const fallbackIndex = result.trace.findIndex((e) => e.type === "fallback");
+      const critiqueIndex = result.trace.findIndex((e) => e.type === "critique");
+      assert.ok(fallbackIndex >= 0 && critiqueIndex >= 0);
+      assert.ok(fallbackIndex < critiqueIndex);
+      assert.deepEqual(result.trace[fallbackIndex], {
+        type: "fallback",
+        from: "primary-model",
+        to: "backup-model",
+        reason: "non_transient",
+      });
     });
   });
 });

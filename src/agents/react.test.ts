@@ -55,3 +55,35 @@ describe("createReactStrategy — 013-model-resilience (US1)", () => {
     assert.equal(result.metrics.llmCalls, 1);
   });
 });
+
+// --- 013-model-resilience (US2): metrics.modelUsed and the fallback trace event ---
+
+describe("createReactStrategy — 013-model-resilience (US2)", () => {
+  it("without a switch, modelUsed is the primary and no fallback event appears", async () => {
+    const store = new InMemoryOpsRepository(baselineState());
+    const primary = new FakeListChatModel({ responses: ["resposta direta"] });
+    const strategy = createReactStrategy(store, { source: fakeSource({ primary }) });
+
+    const result = await strategy.run("quais alertas estão abertos?");
+
+    assert.equal(result.metrics.modelUsed, "primary-model");
+    assert.ok(!result.trace.some((e) => e.type === "fallback"));
+  });
+
+  it("with a switch, modelUsed is the backup and trace[0] is the fallback event", async () => {
+    const store = new InMemoryOpsRepository(baselineState());
+    const primary = new FailingModel(notFoundError());
+    const backup = new FakeListChatModel({ responses: ["resposta do reserva"] });
+    const strategy = createReactStrategy(store, { source: fakeSource({ primary, backup }) });
+
+    const result = await strategy.run("quais alertas estão abertos?");
+
+    assert.equal(result.metrics.modelUsed, "backup-model");
+    assert.deepEqual(result.trace[0], {
+      type: "fallback",
+      from: "primary-model",
+      to: "backup-model",
+      reason: "non_transient",
+    });
+  });
+});

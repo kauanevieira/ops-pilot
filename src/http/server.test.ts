@@ -1962,3 +1962,35 @@ describe("POST /chat — 012 US3 (nodeName)", () => {
     });
   });
 });
+
+// --- 013-model-resilience: User Story 2 (modelUsed and the fallback event) ---
+
+describe("POST /chat — 013 US2 (modelUsed, fallback)", () => {
+  it("metrics.modelUsed reaches the response body unchanged from the strategy's own metrics", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult({ metrics: { llmCalls: 2, latencyMs: 5, modelUsed: "primary-model" } }));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      const body = await jsonOf(res);
+      assert.equal(body.metrics.modelUsed, "primary-model");
+    });
+  });
+
+  it("a fallback event in the strategy's own trace reaches the response body", async () => {
+    const trace: StrategyResult["trace"] = [
+      { type: "fallback", from: "primary-model", to: "backup-model", reason: "non_transient" },
+      ...FIXED_TRACE,
+    ];
+    const strategy = fakeStrategy("react", async () => fixedResult({ trace, metrics: { llmCalls: 2, latencyMs: 5, modelUsed: "backup-model" } }));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      const body = await jsonOf(res);
+      const fallbackEvent = body.trace.find((e: { type: string }) => e.type === "fallback");
+      assert.deepEqual(fallbackEvent, { type: "fallback", from: "primary-model", to: "backup-model", reason: "non_transient", nodeName: "react" });
+      assert.equal(body.metrics.modelUsed, "backup-model");
+    });
+  });
+});

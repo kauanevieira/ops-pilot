@@ -14,13 +14,18 @@ import type { TraceEvent, StrategyResult } from "../trace/types.ts";
 import type { ReasoningStrategy, RunOptions } from "./types.ts";
 import type { ResolveStrategy, StrategySelection } from "./index.ts";
 import type { OpsRepository } from "../store/repository.ts";
-import { type Router, capReason, FALLBACK_REASON, ROUTE_REASON_MAX_CHARS } from "./router.ts";
+import { type Router, capReason, FALLBACK_REASON, ROUTE_REASON_MAX_CHARS, createModelRouter } from "./router.ts";
 import type { MemoryStore } from "../memory/memory-store.ts";
 import type { RecalledMemory } from "../domain/schemas.ts";
 import { InMemoryConversationStore } from "../store/in-memory-conversation-store.ts";
 import { formatHistoryInput } from "../agents/conversation-history.ts";
 import { formatMemoriesInput } from "../memory/with-memory.ts";
 import { buildContextBreakdown } from "../context/breakdown.ts";
+import { createModelSummarizer } from "../context/summarizer.ts";
+import type { ModelSource, SourcedModel } from "./model.ts";
+import { FakeListChatModel } from "@langchain/core/utils/testing";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { createReactStrategy } from "./react.ts";
 
 // isOverride (data-model.md): strategy present OR reflect === true.
 describe("isOverride", () => {
@@ -552,5 +557,114 @@ describe("production graph — router node (override)", () => {
         assert.equal(routeEvent.reason, "Estratégia imposta pelo pedido.");
       }
     }
+  });
+});
+
+// --- 013-model-resilience (US2): fallback events from the router and the summarizer ---
+
+/** A chat model that always throws the given error from `_generate`. `bindTools` is unused by router/summarizer, no override needed. */
+class FailingModel extends FakeListChatModel {
+  constructor(private failWith: Error) {
+    super({ responses: ["never used"] });
+  }
+  override async _generate(): Promise<never> {
+    throw this.failWith;
+  }
+}
+
+function notFoundError(): Error {
+  const e = new Error("modelo inexistente") as Error & { status: number };
+  e.status = 404;
+  return e;
+}
+
+function fakeModelSource({ primary, backup }: { primary: BaseChatModel; backup: BaseChatModel }): ModelSource {
+  const primarySourced: SourcedModel = { id: "primary-model", model: primary };
+  const backupSourced: SourcedModel = { id: "backup-model", model: backup };
+  return { primary: () => primarySourced, backup: () => backupSourced };
+}
+
+describe("production graph — fallback events from router/summarizer (013-model-resilience, US2)", () => {
+  it("MR1: the real router's own switch produces a fallback event with nodeName router, before route", async () => {
+    const source = fakeModelSource({
+      primary: new FailingModel(notFoundError()),
+      backup: new FakeListChatModel({ responses: ['{"route": "react", "reason": "consulta direta"}'] }),
+    });
+    const router = createModelRouter(source);
+    const { strategy } = recordingStrategy("react", fixedResult("react"));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const graph = createProductionGraph(makeDeps({ resolveStrategy, router }));
+
+    const response = await graph.run({ message: "quais alertas estão abertos?" }, new AbortController().signal);
+
+    const fallbackEvent = response.trace.find((e) => e.type === "fallback");
+    assert.deepEqual(fallbackEvent, {
+      type: "fallback",
+      from: "primary-model",
+      to: "backup-model",
+      reason: "non_transient",
+      nodeName: "router",
+    });
+    const routeIndex = response.trace.findIndex((e) => e.type === "route");
+    const fallbackIndex = response.trace.findIndex((e) => e.type === "fallback");
+    assert.ok(fallbackIndex < routeIndex);
+  });
+
+  it("the summarizer's own switch produces a fallback event with nodeName context, before summarize", async () => {
+    const source = fakeModelSource({
+      primary: new FailingModel(notFoundError()),
+      backup: new FakeListChatModel({ responses: ["resumo do reserva"] }),
+    });
+    const summarizer = createModelSummarizer(source);
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = seedConversation(conversationStore, 16); // triggers summarization
+    const { strategy } = recordingStrategy("react", fixedResult("react"));
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const graph = createProductionGraph(makeDeps({ resolveStrategy, conversationStore, summarizer }));
+
+    const response = await graph.run({ message: "e o resto?", conversationId }, new AbortController().signal);
+
+    const fallbackEvent = response.trace.find((e) => e.type === "fallback");
+    assert.equal(fallbackEvent?.nodeName, "context");
+    const summarizeIndex = response.trace.findIndex((e) => e.type === "summarize");
+    const fallbackIndex = response.trace.findIndex((e) => e.type === "fallback");
+    assert.ok(fallbackIndex < summarizeIndex);
+  });
+
+  it("FR-011a: after the router switches, the strategy's own primary attempt is skipped in the same request", async () => {
+    const routerPrimary = new FailingModel(notFoundError());
+    const routerSource = fakeModelSource({
+      primary: routerPrimary,
+      backup: new FakeListChatModel({ responses: ['{"route": "react", "reason": "consulta direta"}'] }),
+    });
+    const router = createModelRouter(routerSource);
+
+    // The strategy's own model call shares the SAME resilience scope
+    // (opened once per `run`), so — even though this strategy's primary
+    // is a DIFFERENT model instance from the router's — the scope itself
+    // (not the model) is what's shared, and it must already be "down".
+    const strategyPrimaryAttempts = { count: 0 };
+    class CountingFailingModel extends FakeListChatModel {
+      override async _generate(): Promise<never> {
+        strategyPrimaryAttempts.count += 1;
+        throw notFoundError();
+      }
+      override bindTools() {
+        return this;
+      }
+    }
+    const strategyPrimary = new CountingFailingModel({ responses: ["never used"] });
+    const strategyBackup = new FakeListChatModel({ responses: ["resposta do reserva"] });
+
+    const store = {} as OpsRepository;
+    const strategy = createReactStrategy(store, {
+      source: { primary: () => ({ id: "strategy-primary", model: strategyPrimary }), backup: () => ({ id: "strategy-backup", model: strategyBackup }) },
+    });
+    const resolveStrategy: ResolveStrategy = () => strategy;
+    const graph = createProductionGraph(makeDeps({ resolveStrategy, router }));
+
+    await graph.run({ message: "oi" }, new AbortController().signal);
+
+    assert.equal(strategyPrimaryAttempts.count, 0);
   });
 });
