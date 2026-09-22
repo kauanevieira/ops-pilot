@@ -32,6 +32,14 @@
 > `summarize`; `metrics` ganha `summaryCoveredMessages` e `contextBreakdown` ganha a
 > fonte `summary`. Corpo da requisição não muda. Ver
 > [`specs/011-history-summarization/contracts/chat-endpoint.md`](../../011-history-summarization/contracts/chat-endpoint.md).
+>
+> **Emendado também por `012-unified-graph`**: sem `strategy` e sem `reflect: true`, a
+> estratégia deixa de ser sempre `react` (FR-007 abaixo) — um roteador decide entre
+> `react`, `plan-and-execute` e `reflect`. Com `strategy` ou `reflect: true`, nada muda:
+> a escolha continua sendo do pedido, e o roteador nem é consultado. `trace` ganha um
+> evento `route` (sempre presente, logo depois do `summarize` quando houver) e todo
+> evento do rastro ganha `nodeName`. Corpo da requisição e corpos de erro não mudam. Ver
+> [`specs/012-unified-graph/contracts/chat-endpoint.md`](../../012-unified-graph/contracts/chat-endpoint.md).
 
 O único endpoint da feature. Recebe um pedido em linguagem natural, executa uma estratégia
 de raciocínio e devolve o resultado da execução.

@@ -2,6 +2,13 @@
 
 **Feature**: `011-history-summarization` | Satisfaz FR-017 a FR-029
 
+> **Emendado também por `012-unified-graph`**: o evento `summarize`, quando presente,
+> continua na posição 0 do rastro — agora sempre seguido por um evento `route` (presente
+> em todo pedido, com ou sem sumarização), antes dos eventos da estratégia. Todo evento
+> do rastro, incluindo `summarize`, ganha `nodeName` (`"context"` no caso do
+> `summarize`). Nada do que este documento descreve muda. Ver
+> [`specs/012-unified-graph/contracts/chat-endpoint.md`](../../012-unified-graph/contracts/chat-endpoint.md).
+
 Emenda [`003-chat-http-api/contracts/chat-endpoint.md`](../../003-chat-http-api/contracts/chat-endpoint.md),
 já emendado pela 007, 008, 009 e 010. **Corpo da requisição e corpos de erro não mudam.**
 

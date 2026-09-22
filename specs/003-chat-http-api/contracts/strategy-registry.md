@@ -2,6 +2,13 @@
 
 **Feature**: `003-chat-http-api` | Satisfies FR-009 a FR-012, FR-022
 
+> **Emendado por `012-unified-graph`**: `resolveStrategy` continua o único ponto de
+> resolução entre uma seleção e a estratégia, e continua chamado exatamente uma vez por
+> pedido do `/chat` — só que agora quem escolhe a seleção, quando o pedido não impõe
+> uma, é o roteador do grafo de produção (`src/agents/production-graph.ts`), não mais o
+> default fixo do handler. Nada nesta interface muda. Ver
+> [`specs/012-unified-graph/contracts/router.md`](../../012-unified-graph/contracts/router.md).
+
 Ponto único de resolução entre um nome de estratégia e a estratégia correspondente, com a
 reflexão aplicada como modificador. Substitui `src/agents/registry.ts`, absorvendo sua
 superfície inteira (R-002).
