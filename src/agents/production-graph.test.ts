@@ -520,3 +520,37 @@ describe("production graph — router node (no override)", () => {
     assert.equal(response.metrics.llmCalls, 3);
   });
 });
+
+// --- router node: RN1 with override (contracts/router.md) ---------------
+
+describe("production graph — router node (override)", () => {
+  it("RN1: com override, o roteador não é chamado; a rota vem de routeForSelection(override.selection)", async () => {
+    const cases: { selection: { name?: string; reflect: boolean }; expectedRoute: Route; expectedLabel: string }[] = [
+      { selection: { name: "plan-and-execute", reflect: false }, expectedRoute: "plan-and-execute", expectedLabel: "plan-and-execute" },
+      { selection: { name: "plan-and-execute", reflect: true }, expectedRoute: "reflect", expectedLabel: "reflect:plan-and-execute" },
+      { selection: { name: undefined, reflect: true }, expectedRoute: "reflect", expectedLabel: "reflect:react" },
+    ];
+
+    for (const { selection, expectedRoute, expectedLabel } of cases) {
+      const { strategy, calls: strategyCalls } = recordingStrategy(expectedLabel, fixedResult(expectedLabel));
+      const { router, calls: routerCalls } = fixedRouter("react", "não deveria ser usado");
+      const graph = createProductionGraph(makeDeps({ router }));
+
+      const response = await graph.run(
+        { message: "oi", override: { selection, strategy } },
+        new AbortController().signal,
+      );
+
+      assert.equal(routerCalls.length, 0);
+      assert.equal(strategyCalls.length, 1);
+      const routeEvent = response.trace.find((e) => e.type === "route");
+      assert.equal(routeEvent?.type, "route");
+      if (routeEvent?.type === "route") {
+        assert.equal(routeEvent.route, expectedRoute);
+        assert.equal(routeEvent.strategy, expectedLabel);
+        assert.equal(routeEvent.source, "override");
+        assert.equal(routeEvent.reason, "Estratégia imposta pelo pedido.");
+      }
+    }
+  });
+});

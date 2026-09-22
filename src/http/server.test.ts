@@ -1850,3 +1850,66 @@ describe("POST /chat — 012 US1 (roteamento)", () => {
     });
   });
 });
+
+// --- 012-unified-graph: User Story 2 (override) -----------------------------
+
+describe("POST /chat — 012 US2 (override)", () => {
+  it("com strategy, com strategy+reflect e com reflect sozinho, o roteador não é chamado e resolveStrategy recebe a seleção exata do pedido (CH3)", async () => {
+    const cases: { body: Record<string, unknown>; expectedSelection: { name: string | undefined; reflect: boolean } }[] = [
+      { body: { strategy: "plan-and-execute" }, expectedSelection: { name: "plan-and-execute", reflect: false } },
+      { body: { strategy: "plan-and-execute", reflect: true }, expectedSelection: { name: "plan-and-execute", reflect: true } },
+      { body: { reflect: true }, expectedSelection: { name: undefined, reflect: true } },
+    ];
+
+    for (const { body, expectedSelection } of cases) {
+      const strategy = fakeStrategy("react", async () => fixedResult());
+      const { resolveStrategy, calls } = recordingResolveStrategy(strategy);
+      const { router, calls: routerCalls } = fixedRouter("react", "não deveria ser usado");
+
+      await withServer({ resolveStrategy, router }, async (baseUrl) => {
+        const res = await postChat(baseUrl, { message: "oi", ...body });
+        assert.equal(res.status, 200);
+        const responseBody = await jsonOf(res);
+        const routeEvent = responseBody.trace.find((e: { type: string }) => e.type === "route");
+        assert.equal(routeEvent.source, "override");
+      });
+
+      assert.equal(routerCalls.length, 0);
+      assert.deepEqual(calls[0], expectedSelection);
+    }
+  });
+
+  it("reflect: false sozinho (sem strategy) é roteado, não é override (research R-015)", async () => {
+    const strategy = fakeStrategy("react", async () => fixedResult());
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const { router, calls: routerCalls } = fixedRouter("react", "dublê");
+
+    await withServer({ resolveStrategy, router }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi", reflect: false });
+      const body = await jsonOf(res);
+      const routeEvent = body.trace.find((e: { type: string }) => e.type === "route");
+      assert.equal(routeEvent.source, "router");
+    });
+
+    assert.equal(routerCalls.length, 1);
+  });
+
+  it("strategy desconhecida (422) e strategy vazia (400) não consultam roteador nem sumarizador (CH6)", async () => {
+    const unknownResolveStrategy: ResolveStrategy = (selection) => {
+      throw new UnknownStrategyError(selection.name ?? "react", ["react", "plan-and-execute"]);
+    };
+    const { router, calls: routerCalls } = fixedRouter("react", "não deveria ser usado");
+    const { summarizer, calls: summarizerCalls } = recordingSummarizer(() => "não deveria ser chamado");
+
+    await withServer({ resolveStrategy: unknownResolveStrategy, router, summarizer }, async (baseUrl) => {
+      const res422 = await postChat(baseUrl, { message: "oi", strategy: "planner" });
+      assert.equal(res422.status, 422);
+
+      const res400 = await postChat(baseUrl, { message: "oi", strategy: "  " });
+      assert.equal(res400.status, 400);
+    });
+
+    assert.equal(routerCalls.length, 0);
+    assert.equal(summarizerCalls.length, 0);
+  });
+});
