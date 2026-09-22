@@ -1,6 +1,6 @@
 import type { ConversationMessage } from "../domain/schemas.ts";
 import { ROUTE_REASON_MAX_CHARS, routeDecisionSchema, type RouteDecision } from "../domain/schemas.ts";
-import { createModel } from "./model.ts";
+import { resilient, envModelSource, type ModelSource } from "./model.ts";
 import { formatSummaryBlock, formatHistoryBlock } from "./conversation-history.ts";
 
 export { ROUTE_REASON_MAX_CHARS };
@@ -94,7 +94,7 @@ export const ROUTER_PROMPT = [
 
 /**
  * Default, real router (research R-004, same pattern as `createModelSummarizer`
- * in 011 and `createModelDistiller` in 009): `createModel()` is called
+ * in 011 and `createModelDistiller` in 009): `resilient(...)` is called
  * INSIDE the returned function, never here — building this router reads no
  * environment variable, so the default `ChatAppDeps` stays constructible
  * without credentials (RT4).
@@ -103,19 +103,22 @@ export const ROUTER_PROMPT = [
  * plain text — the router's decision has two named fields (`route`,
  * `reason`), unlike the summarizer's single paragraph. No callbacks
  * passed: the router's own call MUST NOT contribute to `llmCalls`/
- * `promptTokens` (FR-022).
+ * `promptTokens` (FR-022) — its `model_used`/`fallback` events (013-model-resilience)
+ * still reach the production graph's per-request recorder, which is
+ * attached implicitly via `graph.invoke`'s own config, not passed here.
  */
-export function createModelRouter(): Router {
+export function createModelRouter(source: ModelSource = envModelSource()): Router {
   return async (input, signal) => {
-    const decision: RouteDecision = await createModel()
-      .withStructuredOutput<RouteDecision>(routeDecisionSchema)
-      .invoke(
-        [
-          ["system", ROUTER_PROMPT],
-          ["human", formatRouterInput(input)],
-        ],
-        { signal },
-      );
+    const decision: RouteDecision = await resilient<unknown, RouteDecision>(
+      (m) => m.withStructuredOutput<RouteDecision>(routeDecisionSchema),
+      source,
+    ).invoke(
+      [
+        ["system", ROUTER_PROMPT],
+        ["human", formatRouterInput(input)],
+      ],
+      { signal },
+    );
     return decision;
   };
 }

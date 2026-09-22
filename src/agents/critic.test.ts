@@ -1,7 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildCritiqueContext } from "./critic.ts";
+import { FakeListChatModel } from "@langchain/core/utils/testing";
+import { buildCritiqueContext, createLlmCritic } from "./critic.ts";
 import type { StrategyResult, TraceEvent } from "../trace/types.ts";
+import type { ModelSource, SourcedModel } from "./model.ts";
 
 function result(trace: TraceEvent[], answer = "resposta final"): StrategyResult {
   return { answer, trace, metrics: { llmCalls: 1, latencyMs: 10 }, stoppedReason: "completed" };
@@ -66,5 +68,30 @@ describe("buildCritiqueContext", () => {
     const second = buildCritiqueContext("pedido", r);
 
     assert.deepEqual(first, second);
+  });
+});
+
+// --- 013-model-resilience (US1): createLlmCritic survives a primary failure ---
+
+describe("createLlmCritic — 013-model-resilience (US1)", () => {
+  it("judges from the backup when the primary fails with a non-transient error", async () => {
+    class FailingModel extends FakeListChatModel {
+      override async _generate(): Promise<never> {
+        const e = new Error("modelo inexistente") as Error & { status: number };
+        e.status = 404;
+        throw e;
+      }
+    }
+    const primary = new FailingModel({ responses: ["never used"] });
+    const backup = new FakeListChatModel({ responses: ['{"approved": true, "feedback": "ok"}'] });
+    const source: ModelSource = {
+      primary: () => ({ id: "primary-model", model: primary }) as SourcedModel,
+      backup: () => ({ id: "backup-model", model: backup }) as SourcedModel,
+    };
+    const critic = createLlmCritic(source);
+
+    const verdict = await critic(buildCritiqueContext("pedido", result([])), []);
+
+    assert.deepEqual(verdict, { approved: true, feedback: "ok" });
   });
 });

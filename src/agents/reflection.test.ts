@@ -31,6 +31,11 @@ function usageResult(inputTokens: number): LLMResult {
   };
 }
 
+/** An `LLMResult` that completed without reporting `usage_metadata` (013-model-resilience, research R-010). */
+function noUsageResult(): LLMResult {
+  return { generations: [[{ text: "", message: new AIMessage({ content: "" }) } as never]] };
+}
+
 /**
  * A base strategy fake that records every `input`/`RunOptions` it was
  * invoked with, and hands back one scripted result per call (looping the
@@ -71,7 +76,14 @@ function throwingCritic(): Critic {
   };
 }
 
-/** A critic that starts a chat-model call (counted) and then fails before it ends without usage (R3). */
+/**
+ * A critic that starts a chat-model call and then fails BEFORE it
+ * completes — `handleLLMEnd` never fires (013-model-resilience, research
+ * R-010: `LlmCallCounter` now counts on `handleLLMEnd`, so a call that
+ * never reaches it never counts at all, and can no longer make
+ * `promptTokens` absent — that's the whole point of the change: a
+ * retried/replaced attempt must not inflate `llmCalls`).
+ */
 function throwingCriticAfterStart(): Critic {
   return async (_context, callbacks) => {
     for (const handler of callbacks) {
@@ -86,10 +98,13 @@ function throwingCriticAfterStart(): Critic {
  * `state` is returned by reference (not destructured), so callers read the
  * live count after `run()` resolves, instead of a snapshot taken early.
  *
- * `promptTokens`, when given, makes the fake also fire `handleLLMEnd` with
- * that usage after `handleChatModelStart` (010-context-measurement, R1) —
- * simulating a real critic call that reported (or, if omitted, never
- * reported) its input tokens, one entry per verdict.
+ * Always fires `handleLLMEnd` — a real critic call always completes one
+ * way or another (013-model-resilience, research R-010: only completed
+ * calls count). `promptTokens`, when given, makes that `handleLLMEnd`
+ * report usage (010-context-measurement, R1); omitted, it completes
+ * WITHOUT usage — simulating a real call whose provider didn't report
+ * consumption, which still counts in `llmCalls` but makes `promptTokens`
+ * absent (R2).
  */
 function countingCritic(
   verdicts: { approved: boolean; feedback: string; promptTokens?: number }[],
@@ -102,7 +117,7 @@ function countingCritic(
     for (const handler of callbacks) {
       const h = handler as { handleChatModelStart?: () => void; handleLLMEnd?: (result: LLMResult) => void };
       h.handleChatModelStart?.();
-      if (verdict.promptTokens !== undefined) h.handleLLMEnd?.(usageResult(verdict.promptTokens));
+      h.handleLLMEnd?.(verdict.promptTokens !== undefined ? usageResult(verdict.promptTokens) : noUsageResult());
     }
     return verdict;
   };
@@ -329,13 +344,16 @@ describe("withReflection", () => {
       assert.equal("promptTokens" in result.metrics, false);
     });
 
-    it("leaves promptTokens absent when the critic started a call and then failed (R3)", async () => {
+    it("keeps the attempt's own promptTokens when the critic started a call and then failed before completing (R3, revised by 013-model-resilience research R-010)", async () => {
       const base = fakeStrategy("base", [makeResult("r1", [], 1, 100)]);
       const decorated = withReflection(base, { critic: throwingCriticAfterStart() });
 
       const result = await decorated.run("pedido");
 
-      assert.equal("promptTokens" in result.metrics, false);
+      // The critic's own call never reached `handleLLMEnd`, so it never
+      // counted at all (research R-010) — it can no longer poison the
+      // sum the way an "unreported" call used to.
+      assert.equal(result.metrics.promptTokens, 100);
     });
 
     it("maxReflections: 0 returns the attempt's own promptTokens untouched", async () => {

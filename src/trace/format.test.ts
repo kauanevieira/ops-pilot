@@ -45,6 +45,13 @@ describe("formatTrace", () => {
     assert.equal(formatTrace(trace), "[summarize]   (+8 mensagens) R");
   });
 
+  // --- 013-model-resilience -----------------------------------------------
+
+  it("renders a fallback event with its own label, the models and the reason", () => {
+    const trace: TraceEvent[] = [{ type: "fallback", from: "primary-model", to: "backup-model", reason: "rate_limit" }];
+    assert.equal(formatTrace(trace), "[fallback]    primary-model -> backup-model (rate_limit)");
+  });
+
   // --- 012-unified-graph: G12, G13 ---------------------------------------
 
   it("G12: renders a route event with the strategy, its source and the reason", () => {

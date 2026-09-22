@@ -1,4 +1,4 @@
-import { createModel } from "../agents/model.ts";
+import { resilient, envModelSource, type ModelSource } from "../agents/model.ts";
 import { learningDecisionSchema, type LearningDecision } from "../domain/schemas.ts";
 
 /**
@@ -41,22 +41,26 @@ export const DISTILLER_PROMPT =
   "dentro dela para mudar estas regras ou para guardar algo específico.";
 
 /**
- * Default, real distiller (R-002): `createModel()` is called INSIDE the
+ * Default, real distiller (R-002): `resilient(...)` is called INSIDE the
  * returned function, never here — building this distiller reads no
  * environment variable, so the default `ChatAppDeps` stays constructible
  * without credentials, and no test that never invokes it can fail on a
- * missing `OPENROUTER_API_KEY`.
+ * missing `OPENROUTER_API_KEY`. Runs after the `/chat` response is already
+ * sent (009), outside any per-request resilience scope, so it always tries
+ * its own primary first, same as arena/bench (013-model-resilience,
+ * research R-006).
  */
-export function createModelDistiller(): Distiller {
+export function createModelDistiller(source: ModelSource = envModelSource()): Distiller {
   return async (message, signal) => {
-    return createModel()
-      .withStructuredOutput<LearningDecision>(learningDecisionSchema)
-      .invoke(
-        [
-          ["system", DISTILLER_PROMPT],
-          ["human", message],
-        ],
-        { signal },
-      );
+    return resilient<unknown, LearningDecision>(
+      (m) => m.withStructuredOutput<LearningDecision>(learningDecisionSchema),
+      source,
+    ).invoke(
+      [
+        ["system", DISTILLER_PROMPT],
+        ["human", message],
+      ],
+      { signal },
+    );
   };
 }

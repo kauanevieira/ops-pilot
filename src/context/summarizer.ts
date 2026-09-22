@@ -1,4 +1,4 @@
-import { createModel } from "../agents/model.ts";
+import { resilient, envModelSource, type ModelSource } from "../agents/model.ts";
 import { SUMMARY_MAX_CHARS } from "../domain/schemas.ts";
 import { formatTranscript } from "../agents/conversation-history.ts";
 import type { ConversationMessage } from "../domain/schemas.ts";
@@ -72,7 +72,7 @@ export function capSummary(text: string): string {
 
 /**
  * Default, real summarizer (R-007, same pattern as 009's
- * `createModelDistiller`): `createModel()` is called INSIDE the returned
+ * `createModelDistiller`): `resilient(...)` is called INSIDE the returned
  * function, never here — building this summarizer reads no environment
  * variable, so the default `ChatAppDeps` stays constructible without
  * credentials, and no test that never invokes it can fail on a missing
@@ -81,11 +81,17 @@ export function capSummary(text: string): string {
  * Plain text, not structured output (research R-007): the result is a
  * paragraph, and `AIMessage.text` reads it whether the model returned a
  * plain string or content parts. Never wired to a `LlmCallCounter` (Z6,
- * FR-026) — this call doesn't count toward `llmCalls`/`promptTokens`.
+ * FR-026) — this call doesn't count toward `llmCalls`/`promptTokens`. Its
+ * `model_used`/`fallback` events (013-model-resilience) still reach the
+ * production graph's per-request recorder, attached implicitly by
+ * `graph.invoke`.
  */
-export function createModelSummarizer(): Summarizer {
+export function createModelSummarizer(source: ModelSource = envModelSource()): Summarizer {
   return async (input, signal) => {
-    const response = await createModel().invoke(
+    const response = await resilient(
+      (m) => m,
+      source,
+    ).invoke(
       [
         ["system", SUMMARIZER_PROMPT],
         ["human", formatSummarizerInput(input)],
