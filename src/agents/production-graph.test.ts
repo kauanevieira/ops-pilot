@@ -26,6 +26,7 @@ import type { ModelSource, SourcedModel } from "./model.ts";
 import { FakeListChatModel } from "@langchain/core/utils/testing";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { createReactStrategy } from "./react.ts";
+import { ModelUnavailableError } from "./model.ts";
 
 // isOverride (data-model.md): strategy present OR reflect === true.
 describe("isOverride", () => {
@@ -666,5 +667,21 @@ describe("production graph — fallback events from router/summarizer (013-model
     await graph.run({ message: "oi" }, new AbortController().signal);
 
     assert.equal(strategyPrimaryAttempts.count, 0);
+  });
+});
+
+// --- 013-model-resilience (US3): ModelUnavailableError survives the graph unwrapped ---
+
+describe("production graph — ModelUnavailableError propagation (013-model-resilience, US3, research R-011)", () => {
+  it("a strategy that throws ModelUnavailableError makes run reject with the SAME instance", async () => {
+    const error = new ModelUnavailableError(["primary-model", "backup-model"], "non_transient");
+    const strategy = throwingStrategy("react", error);
+    const { resolveStrategy } = recordingResolveStrategy(strategy);
+    const graph = createProductionGraph(makeDeps({ resolveStrategy }));
+
+    await assert.rejects(graph.run({ message: "oi" }, new AbortController().signal), (thrown: unknown) => {
+      assert.equal(thrown, error);
+      return true;
+    });
   });
 });

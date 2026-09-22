@@ -4,7 +4,19 @@ import type { z } from "zod";
  * Machine-readable discriminator for every error `POST /chat` can respond
  * with (FR-016). A client branches on `code`, not on parsing `message`.
  */
-export type ChatErrorCode = "invalid_body" | "unknown_strategy" | "conversation_not_found" | "timeout" | "internal";
+export type ChatErrorCode =
+  | "invalid_body"
+  | "unknown_strategy"
+  | "conversation_not_found"
+  | "timeout"
+  | "internal"
+  /**
+   * 013-model-resilience, FR-018: the strategy couldn't be answered by any
+   * model it tried (primary, and the backup if configured) — distinct from
+   * `internal`, which stays reserved for a defect in OpsPilot itself. Maps
+   * to a 503, never 500.
+   */
+  | "model_unavailable";
 
 export interface ValidationIssue {
   path: string;

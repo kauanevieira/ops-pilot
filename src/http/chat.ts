@@ -13,6 +13,7 @@ import { SUMMARY_TIMEOUT_MS } from "../context/conversation-context.ts";
 import type { Summarizer } from "../context/summarizer.ts";
 import { createProductionGraph, isOverride, type OverrideChoice } from "../agents/production-graph.ts";
 import { ROUTER_TIMEOUT_MS, type Router } from "../agents/router.ts";
+import { ModelUnavailableError } from "../agents/model.ts";
 import type { StrategyResult } from "../trace/types.ts";
 
 /**
@@ -235,6 +236,19 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
       .catch((error: unknown) => {
         clearTimeout(timer);
         if (res.headersSent) return;
+        // 013-model-resilience, FR-018/FR-019: neither the primary nor the
+        // backup answered the strategy's calls — a 503, not the generic
+        // 500 below, and (same as every other failure branch here) the
+        // turn is never recorded and the learning reflector never fires.
+        // Matched by `instanceof`, never by message, and the provider
+        // detail stays out of the response (it was already logged where
+        // `resilient` produced this error).
+        if (error instanceof ModelUnavailableError) {
+          res
+            .status(503)
+            .json(toErrorBody("model_unavailable", "Nenhum modelo disponível para atender o pedido. Tente novamente em instantes."));
+          return;
+        }
         next(error);
       });
   };
