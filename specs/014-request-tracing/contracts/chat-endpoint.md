@@ -5,6 +5,12 @@
 Emenda [`003-chat-http-api/contracts/chat-endpoint.md`](../../003-chat-http-api/contracts/chat-endpoint.md),
 já emendado pela 007 a 013. **O corpo da requisição não muda.**
 
+> **Emendado por `016-war-room-web`**: para uma origem autorizada (`OPSPILOT_CORS_ORIGINS`) a
+> resposta traz `Access-Control-Expose-Headers: X-Request-Id`, o que deixa o navegador ler o
+> cabeçalho (RT1 continua valendo). O preflight `OPTIONS` termina antes do middleware de
+> rastreio: não gera `requestId`, registro nem linha de log. Ver
+> [`016-war-room-web/contracts/cors.md`](../../016-war-room-web/contracts/cors.md).
+
 ## O que muda para quem chama
 
 1. Toda resposta traz o cabeçalho `X-Request-Id`.

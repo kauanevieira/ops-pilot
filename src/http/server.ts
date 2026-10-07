@@ -19,6 +19,7 @@ import { SUMMARY_TIMEOUT_MS } from "../context/conversation-context.ts";
 import type { Router } from "../agents/router.ts";
 import { ROUTER_TIMEOUT_MS, createModelRouter } from "../agents/router.ts";
 import { createChatHandler } from "./chat.ts";
+import { DEFAULT_CORS_ORIGINS, createCors } from "./cors.ts";
 import { toErrorBody, withRequestId } from "./errors.ts";
 import { createRequestTracking, getObs } from "./request-tracking.ts";
 import { createGetRequestHandler } from "./requests.ts";
@@ -104,6 +105,12 @@ export interface ChatAppDeps {
    * cost. `src/index.ts` reads it from `OPENROUTER_PRICES`; tests inject it.
    */
   modelPrices?: ModelPrices;
+  /**
+   * 016-war-room-web: the origins the browser may call this API from
+   * (contracts/cors.md). Default is the war room's own dev server;
+   * `src/index.ts` reads `OPSPILOT_CORS_ORIGINS`.
+   */
+  corsOrigins?: string[];
 }
 
 /**
@@ -130,10 +137,14 @@ export function createApp(deps: ChatAppDeps = {}): Express {
   const generateRequestId = deps.generateRequestId ?? randomUUID;
   const now = deps.now ?? (() => new Date());
   const modelPrices = deps.modelPrices ?? {};
+  const corsOrigins = deps.corsOrigins ?? [...DEFAULT_CORS_ORIGINS];
 
   const learn = createLearningReflector({ memoryStore, distiller, timeoutMs: learningTimeoutMs });
 
   const app = express();
+  // 016-war-room-web: before every route, so the headers reach even the 400 of
+  // a malformed body, and a preflight never gets to the tracking middleware.
+  app.use(createCors(corsOrigins));
   // 014-request-tracing (research R-002): the tracking middleware goes
   // BEFORE the JSON parser, so even a malformed body gets `X-Request-Id`.
   app.post(

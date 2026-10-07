@@ -2511,3 +2511,106 @@ describe("015: GET /stats", () => {
     });
   });
 });
+
+// --- 016-war-room-web, US5: CORS (contracts/cors.md) ---------------------------
+
+const WAR_ROOM = "http://localhost:5173";
+
+function preflight(baseUrl: string, path: string, origin: string): Promise<Response> {
+  return fetch(`${baseUrl}${path}`, {
+    method: "OPTIONS",
+    headers: { Origin: origin, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type" },
+  });
+}
+
+describe("016: CORS (US5)", () => {
+  it("an allowed preflight is 204 with the allow headers, and writes no request record or log line (CO2)", async () => {
+    const requestStore = newRequestStore();
+    const cap = captureLogger();
+    await withServer({ corsOrigins: [WAR_ROOM], requestStore, logger: cap.logger }, async (baseUrl) => {
+      const res = await preflight(baseUrl, "/chat", WAR_ROOM);
+      assert.equal(res.status, 204);
+      assert.equal(res.headers.get("access-control-allow-origin"), WAR_ROOM);
+      assert.equal(res.headers.get("access-control-allow-methods"), "GET, POST");
+      assert.equal(res.headers.get("access-control-allow-headers"), "Content-Type");
+      assert.equal(res.headers.get("x-request-id"), null);
+      assert.equal(await res.text(), "");
+
+      const stats = await jsonOf(await fetch(`${baseUrl}/stats`));
+      assert.equal(stats.total, 0);
+      assert.equal(requestStore.listSince(new Date(0), new Date(Date.now() + 86_400_000)).length, 0);
+      assert.equal(cap.lines.length, 0);
+    });
+  });
+
+  it("a preflight from a denied origin is 204 without Access-Control-*", async () => {
+    await withServer({ corsOrigins: [WAR_ROOM] }, async (baseUrl) => {
+      const res = await preflight(baseUrl, "/chat", "https://evil.example");
+      assert.equal(res.status, 204);
+      assert.equal(res.headers.get("access-control-allow-origin"), null);
+      assert.equal(res.headers.get("access-control-allow-methods"), null);
+    });
+  });
+
+  it("POST /chat from an allowed origin is 200 with Allow-Origin and X-Request-Id exposed", async () => {
+    await withServer({ corsOrigins: [WAR_ROOM], resolveStrategy: okStrategy(), generateRequestId: sequentialIds() }, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: WAR_ROOM },
+        body: JSON.stringify({ message: "oi" }),
+      });
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get("access-control-allow-origin"), WAR_ROOM);
+      assert.equal(res.headers.get("access-control-expose-headers"), "X-Request-Id");
+      assert.equal(res.headers.get("x-request-id"), "req-1");
+    });
+  });
+
+  it("CO5: a malformed JSON 400 from an allowed origin still carries the CORS headers", async () => {
+    await withServer({ corsOrigins: [WAR_ROOM], generateRequestId: sequentialIds() }, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: WAR_ROOM },
+        body: "{nao e json",
+      });
+      assert.equal(res.status, 400);
+      assert.equal(res.headers.get("access-control-allow-origin"), WAR_ROOM);
+    });
+  });
+
+  it("a normal request from a denied origin is served but not released to the browser", async () => {
+    await withServer({ corsOrigins: [WAR_ROOM] }, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/stats`, { headers: { Origin: "https://evil.example" } });
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get("access-control-allow-origin"), null);
+      assert.equal(res.headers.get("vary"), "Origin");
+    });
+  });
+
+  it("CO1: without Origin nothing changes — no CORS headers, no Vary", async () => {
+    await withServer({ corsOrigins: [WAR_ROOM], resolveStrategy: okStrategy() }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      assert.equal(res.status, 200);
+      for (const [name] of res.headers) assert.equal(name.startsWith("access-control-"), false, name);
+      assert.equal(res.headers.get("vary"), null);
+    });
+  });
+
+  it("GET /requests/:id and GET /stats are released to an allowed origin", async () => {
+    await withServer({ corsOrigins: [WAR_ROOM] }, async (baseUrl) => {
+      for (const path of ["/stats", "/requests/nao-existe"]) {
+        const res = await fetch(`${baseUrl}${path}`, { headers: { Origin: WAR_ROOM } });
+        assert.equal(res.headers.get("access-control-allow-origin"), WAR_ROOM, path);
+      }
+    });
+  });
+
+  it("with no corsOrigins configured, only the default dev origin is allowed", async () => {
+    await withServer({}, async (baseUrl) => {
+      const ok = await fetch(`${baseUrl}/stats`, { headers: { Origin: WAR_ROOM } });
+      assert.equal(ok.headers.get("access-control-allow-origin"), WAR_ROOM);
+      const denied = await fetch(`${baseUrl}/stats`, { headers: { Origin: "http://localhost:4173" } });
+      assert.equal(denied.headers.get("access-control-allow-origin"), null);
+    });
+  });
+});

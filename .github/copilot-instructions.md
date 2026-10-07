@@ -41,6 +41,17 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
   mudam. Evento de log novo: acrescentar ao catálogo `LogEvent` e a `contracts/log-format.md`.
   Tipo de evento de rastro novo: atualizar `traceEventTypeSchema` e o `CHECK` de `trace_events`.
 
+- `web/` é a war room (Vite + React + TypeScript, base `/opspilot/`), um pacote próprio com
+  `package.json` e testes em Vitest (`npm --prefix web test`, `npm --prefix web run typecheck`),
+  fora de `npm test`/`npm run typecheck` da raiz. Os formatos que a API devolve e a war room
+  lê (rastro, métricas, corpo do `/chat`, erro, ação pendente) são esquemas zod em
+  `src/domain/wire.ts`, e `src/trace/types.ts` os deriva por `z.infer`. `src/domain/` só pode
+  importar `zod` e arquivos de `src/domain/` (a war room o importa no navegador; um teste
+  guarda isso). Evento de rastro novo: atualizar `traceEventSchema` em `wire.ts`,
+  `traceEventTypeSchema`, o `CHECK` de `trace_events` **e** o componente do tipo em
+  `web/src/trace/events/` (o `switch` é exaustivo). CORS: `src/http/cors.ts`, origens em
+  `OPSPILOT_CORS_ORIGINS` (padrão `http://localhost:5173`).
+
 ## Comandos
 
 - `npm run dev` — sobe a API HTTP (`src/index.ts`, `POST /chat`)
@@ -50,6 +61,9 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
 - `npm run memory:model` — baixa o modelo de embeddings para `data/models/` (requer rede; rode antes de `npm test` para não pular o teste de recall semântico real)
 - `npm test` — roda os testes (`node --import tsx --test`)
 - `npm run typecheck` — checagem de tipos (`tsc --noEmit`)
+- `npm --prefix web run dev` — war room em `http://localhost:5173/opspilot/` (a API deve estar no ar)
+- `npm --prefix web run build` — gera `web/dist/` para servir sob `/opspilot/`
+- `npm --prefix web test` / `npm --prefix web run typecheck` — portões da war room (offline, sem a API)
 
 Requer **Node 22 LTS** (`engines.node` em `package.json`; ver `.nvmrc`) — versões
 anteriores quebram o `tsc` e a expansão de glob do script `test`.

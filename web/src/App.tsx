@@ -1,0 +1,165 @@
+import { useMemo, useReducer, useRef, useState } from "react";
+import { createApiClient } from "./api/client.ts";
+import { Composer } from "./chat/Composer.tsx";
+import { toDisplayError } from "./chat/errors.ts";
+import type { ApprovalDecision } from "@domain/wire.ts";
+import { MessageList } from "./chat/MessageList.tsx";
+import { DEFAULT_API_URL } from "./api/url.ts";
+import { loadApiUrl, resetApiUrl, saveApiUrl, type ApiUrlSetting } from "./settings/api-url-store.ts";
+import { SettingsDialog } from "./settings/SettingsDialog.tsx";
+import { TraceDrawer } from "./trace/TraceDrawer.tsx";
+import { canSend, conversationReducer, initialConversation } from "./state/conversation.ts";
+
+interface Props {
+  /** Injected by the tests; the app itself uses the browser's. */
+  fetch?: typeof fetch;
+  storage?: Storage | null;
+  newId?: () => string;
+  now?: () => Date;
+}
+
+/** contracts/approval-flow.md: the API refused the decision itself — the card closes (FR-015). */
+const REJECTION_REASONS: Record<number, string> = {
+  404: "Pendência não encontrada",
+  409: "Já decidida",
+  410: "Expirou",
+};
+
+function browserStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+export function App(props: Props) {
+  const doFetch = props.fetch ?? ((...args: Parameters<typeof fetch>) => globalThis.fetch(...args));
+  const newId = props.newId ?? (() => crypto.randomUUID());
+  const now = props.now ?? (() => new Date());
+  const [storage] = useState(() => (props.storage !== undefined ? props.storage : browserStorage()));
+  const [apiUrl, setApiUrl] = useState<ApiUrlSetting>(() => loadApiUrl(storage));
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const [state, dispatch] = useReducer(conversationReducer, initialConversation);
+  const [traceItemId, setTraceItemId] = useState<string | null>(null);
+  const client = useMemo(() => createApiClient({ baseUrl: apiUrl.url, fetch: doFetch }), [apiUrl.url, doFetch]);
+
+  async function send(text: string) {
+    if (!canSend(state)) return;
+    dispatch({ type: "send", id: newId(), text, at: now().toISOString() });
+    const outcome = await client.sendChat({
+      message: text,
+      ...(state.conversationId !== null ? { conversationId: state.conversationId } : {}),
+    });
+    const at = now().toISOString();
+    if (outcome.kind === "answered") {
+      dispatch({ type: "answered", id: newId(), result: outcome.result, at });
+    } else if (outcome.kind === "pending") {
+      dispatch({ type: "pending", id: newId(), accepted: outcome.accepted, at });
+    } else if (outcome.kind === "denied") {
+      // Only a decision can be denied; a `/chat` answer shaped like one is not what the contract says.
+      dispatch({ type: "failed", id: newId(), error: toDisplayError({ kind: "malformed", status: 200 }), retryText: text, at });
+    } else {
+      dispatch({ type: "failed", id: newId(), error: toDisplayError(outcome), retryText: text, at });
+    }
+  }
+
+  /** UI2: one decision call per card, even if the button is hit again before the re-render. */
+  const decidingIds = useRef(new Set<string>());
+
+  async function decide(itemId: string, decision: ApprovalDecision) {
+    const item = state.items.find((i) => i.id === itemId);
+    if (item?.kind !== "approval" || item.state.status !== "pending") return;
+    if (decidingIds.current.has(itemId)) return;
+    decidingIds.current.add(itemId);
+    dispatch({ type: "decide", itemId, decision });
+    try {
+      const outcome = await client.decide(item.pending.approval.id, decision);
+      const at = now().toISOString();
+      if (outcome.kind === "answered") {
+        dispatch({
+          type: "decided",
+          itemId,
+          outcome: { kind: "approved", next: { kind: "answer", id: newId(), result: outcome.result, at } },
+        });
+      } else if (outcome.kind === "pending") {
+        dispatch({
+          type: "decided",
+          itemId,
+          outcome: { kind: "approved", next: { kind: "approval", id: newId(), accepted: outcome.accepted, at } },
+        });
+      } else if (outcome.kind === "denied") {
+        dispatch({ type: "decided", itemId, outcome: { kind: "denied" } });
+      } else if (outcome.kind === "api-error" && outcome.status in REJECTION_REASONS) {
+        dispatch({ type: "decided", itemId, outcome: { kind: "rejected", reason: REJECTION_REASONS[outcome.status]! } });
+      } else {
+        dispatch({ type: "decisionFailed", itemId, errorId: newId(), error: toDisplayError(outcome), at });
+      }
+    } finally {
+      decidingIds.current.delete(itemId);
+    }
+  }
+
+  function saveUrl(url: string) {
+    setApiUrl({ url, source: "saved", persistent: saveApiUrl(storage, url) });
+    setSettingsOpen(false);
+  }
+
+  function restoreDefaultUrl() {
+    setApiUrl({ url: DEFAULT_API_URL, source: "default", persistent: resetApiUrl(storage) });
+    setSettingsOpen(false);
+  }
+
+  function reset() {
+    setTraceItemId(null);
+    dispatch({ type: "reset" });
+  }
+
+  const traced = state.items.find((item) => item.id === traceItemId);
+
+  const last = state.items.at(-1);
+  const retryItemId = last?.kind === "error" && !state.inFlight ? last.id : null;
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1>OpsPilot · War Room</h1>
+        <span className="api-url" title={apiUrl.url}>
+          {apiUrl.url}
+          {apiUrl.source === "default" ? " (padrão)" : ""}
+        </span>
+        <button type="button" className="btn" onClick={() => reset()}>
+          Nova conversa
+        </button>
+        <button
+          type="button"
+          className="btn btn-icon"
+          aria-label="Configurações"
+          title="Configurações"
+          onClick={() => setSettingsOpen(true)}
+        >
+          ⚙
+        </button>
+      </header>
+      <MessageList
+        items={state.items}
+        retryItemId={retryItemId}
+        onRetry={(text) => void send(text)}
+        onNewConversation={reset}
+        onDecide={(itemId, decision) => void decide(itemId, decision)}
+        onShowTrace={setTraceItemId}
+      />
+      {traced?.kind === "answer" && <TraceDrawer result={traced.result} onClose={() => setTraceItemId(null)} />}
+      {settingsOpen && (
+        <SettingsDialog
+          setting={apiUrl}
+          onSave={saveUrl}
+          onReset={restoreDefaultUrl}
+          onCancel={() => setSettingsOpen(false)}
+        />
+      )}
+      <Composer disabled={!canSend(state)} inFlight={state.inFlight} onSend={(text) => void send(text)} />
+    </div>
+  );
+}
