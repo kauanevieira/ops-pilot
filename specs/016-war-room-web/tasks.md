@@ -85,7 +85,7 @@ da Phase 1 e pode correr em paralelo a esta.
 
 ### Esquemas de rede (contracts/wire-schemas.md, research R-003/R-004)
 
-- [ ] T009 Escrever `src/domain/wire.test.ts` (`node:test`). Deve falhar até T010/T011:
+- [x] T009 Escrever `src/domain/wire.test.ts` (`node:test`). Deve falhar até T010/T011:
   - **WS3**: as fixtures `StrategyResult` de `src/http/server.test.ts` (`FIXED_TRACE`/`fixedResult`)
     e um resultado com os 9 tipos de evento, `nodeName` e todas as métricas opcionais
     (inclusive `contextBreakdown`) passam em `strategyResultSchema.parse`.
@@ -98,7 +98,7 @@ da Phase 1 e pode correr em paralelo a esta.
   - `approvalDecisionSchema` aceita só `"approve" | "deny"`.
   - **WS4**: lê com `node:fs` cada `src/domain/*.ts` que não seja `*.test.ts` e falha se algum
     `import` vier de algo que não seja `"zod"` ou `"./…"`.
-- [ ] T010 Criar `src/domain/wire.ts` (depende de T009), só com imports de `zod` e
+- [x] T010 Criar `src/domain/wire.ts` (depende de T009), só com imports de `zod` e
   `./schemas.ts`:
   - `traceEventSchema`: `z.discriminatedUnion("type", [...])` com os 9 membros exatamente como
     em `src/trace/types.ts` (`thought{content}`, `action{tool, args: z.record(z.string(),
@@ -120,7 +120,7 @@ da Phase 1 e pode correr em paralelo a esta.
     e `approvalDeniedSchema`, conforme a tabela de `contracts/wire-schemas.md`.
   - exportar os tipos inferidos (`ChatResponseWire`, `ApiErrorBody`, `PendingAction`,
     `ChatAccepted`, `ApprovalDecision`, `ApprovalDenied`).
-- [ ] T011 Em `src/trace/types.ts` (depende de T010; WS1/WS2):
+- [x] T011 Em `src/trace/types.ts` (depende de T010; WS1/WS2):
   - `TraceEvent`, `RunMetrics`, `ContextBreakdown` e `StrategyResult` passam a ser
     `z.infer<typeof …Schema>` de `../domain/wire.ts`. Remover a união escrita à mão e as
     interfaces, sem mudar nenhum nome exportado.
@@ -128,7 +128,7 @@ da Phase 1 e pode correr em paralelo a esta.
     `TraceEventType`.
   - confirmar que `npm run typecheck` passa sem tocar em nenhum outro arquivo. Se algum
     consumidor quebrar por diferença de opcionalidade, ajustar o esquema, não o consumidor.
-- [ ] T012 Rodar `npm run typecheck && npm test` na raiz: tudo verde, sem regressão
+- [x] T012 Rodar `npm run typecheck && npm test` na raiz: tudo verde, sem regressão
 
 ### URL da API e cliente (research R-007 a R-009, data-model.md)
 
