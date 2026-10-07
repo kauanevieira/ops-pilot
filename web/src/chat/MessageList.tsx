@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { traceEventSchema } from "@domain/wire.ts";
+import { parseTrace } from "../trace/parse-trace.ts";
 import type { ConversationItem } from "../state/conversation.ts";
 import { ErrorBubble } from "./ErrorBubble.tsx";
 
@@ -15,9 +15,8 @@ interface Props {
 
 /** The strategy the router (or the override) chose, read from the route event. */
 function strategyOf(trace: unknown[]): string | null {
-  for (const raw of trace) {
-    const parsed = traceEventSchema.safeParse(raw);
-    if (parsed.success && parsed.data.type === "route") return parsed.data.strategy;
+  for (const parsed of parseTrace(trace)) {
+    if (parsed.kind === "known" && parsed.event.type === "route") return parsed.event.strategy;
   }
   return null;
 }

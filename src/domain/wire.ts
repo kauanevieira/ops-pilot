@@ -93,6 +93,8 @@ export const traceEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("fallback"), from: z.string(), to: z.string(), reason: failureKindSchema, ...withNode }),
 ]);
 
+export type TraceEventWire = z.infer<typeof traceEventSchema>;
+
 /**
  * 010-context-measurement: estimated token count per context source
  * composed by the `/chat` handler. Each field is `estimateTokens` of the

@@ -300,11 +300,11 @@ continuam visíveis.
 
 ### Tests for User Story 2
 
-- [ ] T032 [P] [US2] Escrever `web/src/trace/parse-trace.test.ts`:
+- [x] T032 [P] [US2] Escrever `web/src/trace/parse-trace.test.ts`:
   - cada evento válido sai como `KnownEvent`, na ordem recebida.
   - `{type: "vote", …}`, `{type: "action"}` sem `tool` e um não-objeto saem como
     `{ kind: "unknown", type, raw }`, com `type: null` quando não houver string (FR-008, UI1).
-- [ ] T033 [P] [US2] Escrever `web/src/trace/TraceDrawer.test.tsx`, com a fixture tipada por
+- [x] T033 [P] [US2] Escrever `web/src/trace/TraceDrawer.test.tsx`, com a fixture tipada por
   `z.infer` (research R-010):
   - cada linha da tabela "Apresentação do rastro" de `contracts/web-ui.md` aparece com rótulo e
     campos. `args` aninhado não contém `[object Object]`.
@@ -318,24 +318,24 @@ continuam visíveis.
 
 ### Implementation for User Story 2
 
-- [ ] T034 [US2] Implementar `web/src/trace/parse-trace.ts` (depende de T032):
+- [x] T034 [US2] Implementar `web/src/trace/parse-trace.ts` (depende de T032):
   `parseTrace(raw: unknown[]): ParsedTraceEvent[]` com `traceEventSchema.safeParse` de
   `@domain/wire.ts`. Trocar o uso provisório em `MessageList` (T022).
-- [ ] T035 [P] [US2] Implementar `web/src/trace/Collapsible.tsx` (limite de 600 caracteres ou 12
+- [x] T035 [P] [US2] Implementar `web/src/trace/Collapsible.tsx` (limite de 600 caracteres ou 12
   linhas, "mostrar tudo"/"mostrar menos") e `web/src/trace/ArgsTree.tsx` (chave/valor
   recursivo, com arrays numerados e primitivos formatados)
-- [ ] T036 [P] [US2] Implementar `web/src/trace/events/` com um componente por tipo:
+- [x] T036 [P] [US2] Implementar `web/src/trace/events/` com um componente por tipo:
   `SummarizeEvent`, `RouteEvent`, `ThoughtEvent`, `ActionEvent`, `ObservationEvent`,
   `PlanEvent`, `CritiqueEvent` (selo aprovado/reprovado pelo prefixo `aprovado:`/`reprovado:`),
   `AnswerEvent`, `FallbackEvent` e `UnknownEventView`. Cada um com rótulo em texto, a cor
   `--ev-*` (UI4) e o `nodeName`. Mais `web/src/trace/events/index.tsx` com um `switch` exaustivo
   sobre `type`, em que o `default` cai no tipo `never`.
-- [ ] T037 [US2] Implementar `web/src/trace/TraceDrawer.tsx` (depende de T034–T036):
+- [x] T037 [US2] Implementar `web/src/trace/TraceDrawer.tsx` (depende de T034–T036):
   - `role="dialog"`, `aria-modal` e título "Raciocínio".
   - cabeçalho com `stoppedReason` e as métricas presentes, `contextBreakdown` em linha.
   - lista de eventos.
   - fecha com Esc, botão ou clique no fundo, e devolve o foco ao elemento de origem.
-- [ ] T038 [US2] Ligar em `web/src/chat/MessageList.tsx` e `web/src/App.tsx`: botão "ver
+- [x] T038 [US2] Ligar em `web/src/chat/MessageList.tsx` e `web/src/App.tsx`: botão "ver
   raciocínio" em cada `answer`, guardando qual item está aberto no estado local do `App` (não no
   reducer). Rodar T033 e o `App.test.tsx`.
 

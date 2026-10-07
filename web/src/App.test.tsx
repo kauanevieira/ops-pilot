@@ -171,3 +171,47 @@ describe("App · conversation (US1)", () => {
     expect(await screen.findByText(/Não foi possível falar com a API em http:\/\/localhost:3000/)).toBeInTheDocument();
   });
 });
+
+describe("App · ver raciocínio (US2)", () => {
+  it("opens the trace of that answer, and Esc closes it returning focus to the button", async () => {
+    setup(() =>
+      json(200, {
+        ...answer("c1", "3 alertas abertos"),
+        trace: [
+          { type: "route", route: "react", strategy: "react", reason: "simples", source: "router" },
+          { type: "action", tool: "list_alerts", args: { status: "open" } },
+          { type: "answer", content: "3 alertas abertos" },
+        ],
+      }),
+    );
+
+    await userEvent.type(box(), "alertas?");
+    await userEvent.click(sendButton());
+    await screen.findByText("3 alertas abertos");
+    expect(screen.getByText("react")).toBeInTheDocument(); // the strategy chosen, next to the answer
+
+    const opener = screen.getByRole("button", { name: /ver raciocínio/i });
+    await userEvent.click(opener);
+    const dialog = screen.getByRole("dialog", { name: "Raciocínio" });
+    expect(dialog).toHaveTextContent("list_alerts");
+    expect(screen.getAllByTestId("trace-event")).toHaveLength(3);
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+
+  it("each answer opens its own trace", async () => {
+    setup((call) =>
+      json(200, { ...answer("c1", `resposta ${call}`), trace: [{ type: "thought", content: `pensamento ${call}` }] }),
+    );
+    for (const text of ["um", "dois"]) {
+      await userEvent.type(box(), text);
+      await userEvent.click(sendButton());
+      await screen.findByText(text === "um" ? "resposta 1" : "resposta 2");
+    }
+    const buttons = screen.getAllByRole("button", { name: /ver raciocínio/i });
+    await userEvent.click(buttons[0]!);
+    expect(screen.getByRole("dialog")).toHaveTextContent("pensamento 1");
+  });
+});

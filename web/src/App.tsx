@@ -4,6 +4,7 @@ import { Composer } from "./chat/Composer.tsx";
 import { toDisplayError } from "./chat/errors.ts";
 import { MessageList } from "./chat/MessageList.tsx";
 import { loadApiUrl } from "./settings/api-url-store.ts";
+import { TraceDrawer } from "./trace/TraceDrawer.tsx";
 import { canSend, conversationReducer, initialConversation } from "./state/conversation.ts";
 
 interface Props {
@@ -30,6 +31,7 @@ export function App(props: Props) {
   const [apiUrl] = useState(() => loadApiUrl(storage));
 
   const [state, dispatch] = useReducer(conversationReducer, initialConversation);
+  const [traceItemId, setTraceItemId] = useState<string | null>(null);
   const client = useMemo(() => createApiClient({ baseUrl: apiUrl.url, fetch: doFetch }), [apiUrl.url, doFetch]);
 
   async function send(text: string) {
@@ -50,6 +52,13 @@ export function App(props: Props) {
     }
   }
 
+  function reset() {
+    setTraceItemId(null);
+    dispatch({ type: "reset" });
+  }
+
+  const traced = state.items.find((item) => item.id === traceItemId);
+
   const last = state.items.at(-1);
   const retryItemId = last?.kind === "error" && !state.inFlight ? last.id : null;
 
@@ -61,7 +70,7 @@ export function App(props: Props) {
           {apiUrl.url}
           {apiUrl.source === "default" ? " (padrão)" : ""}
         </span>
-        <button type="button" className="btn" onClick={() => dispatch({ type: "reset" })}>
+        <button type="button" className="btn" onClick={() => reset()}>
           Nova conversa
         </button>
       </header>
@@ -69,8 +78,10 @@ export function App(props: Props) {
         items={state.items}
         retryItemId={retryItemId}
         onRetry={(text) => void send(text)}
-        onNewConversation={() => dispatch({ type: "reset" })}
+        onNewConversation={reset}
+        onShowTrace={setTraceItemId}
       />
+      {traced?.kind === "answer" && <TraceDrawer result={traced.result} onClose={() => setTraceItemId(null)} />}
       <Composer disabled={!canSend(state)} inFlight={state.inFlight} onSend={(text) => void send(text)} />
     </div>
   );
