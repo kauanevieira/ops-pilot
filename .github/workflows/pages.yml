@@ -1,0 +1,72 @@
+name: Deploy war room to Pages
+
+# 017: publishes web/ to GitHub Pages. Contract: specs/017-war-room-pages/contracts/pages-workflow.md
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "src/domain/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".nvmrc"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# FR-003: nothing by default; each job asks for what it needs.
+permissions: {}
+
+# FR-004: one publication at a time, and a running one is never cancelled.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      # The war room only needs zod from the root; skip the onnxruntime download (research R-003).
+      - run: npm ci --ignore-scripts
+      - run: npm --prefix web ci
+
+      # FR-007: a failing gate stops the job, so deploy never runs.
+      - run: npm --prefix web run typecheck
+      - run: npm --prefix web test
+
+      - id: pages
+        uses: actions/configure-pages@v6
+
+      - run: npm --prefix web run build
+        env:
+          OPSPILOT_WEB_BASE: ${{ steps.pages.outputs.base_path }}/
+          VITE_OPSPILOT_API_URL: ${{ vars.OPSPILOT_API_URL }}
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

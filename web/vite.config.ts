@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
+import { resolveBase } from "./build/base";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -19,7 +20,7 @@ function copyIndexTo404(): Plugin {
 }
 
 export default defineConfig({
-  base: "/opspilot/",
+  base: resolveBase(process.env.OPSPILOT_WEB_BASE),
   plugins: [react(), copyIndexTo404()],
   resolve: {
     // research R-003: one definition of the wire schemas, shared with the API.
@@ -30,6 +31,6 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test-setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "build/**/*.test.ts"],
   },
 });

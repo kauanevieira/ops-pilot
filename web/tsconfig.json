@@ -13,6 +13,6 @@
     "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"],
     "paths": { "@domain/*": ["../src/domain/*"] }
   },
-  "include": ["src", "vite.config.ts", "../src/domain"],
+  "include": ["src", "build", "vite.config.ts", "../src/domain"],
   "exclude": ["../src/domain/**/*.test.ts"]
 }

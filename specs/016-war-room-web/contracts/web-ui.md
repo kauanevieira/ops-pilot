@@ -6,7 +6,7 @@
 
 | Item | Valor |
 |---|---|
-| Caminho base | `/opspilot/` (dev, preview e build) |
+| Caminho base | `/opspilot/` por padrão (dev, preview e build). Configurável no build por `OPSPILOT_WEB_BASE` (017); no GitHub Pages: `/ops-pilot/` |
 | Build | `npm --prefix web run build` → `web/dist/` com `index.html` e `404.html` idênticos |
 | Variável de build | `VITE_OPSPILOT_API_URL` (default `http://localhost:3000`) |
 | Servidor de dev | `http://localhost:5173/opspilot/` (origem padrão do CORS) |
