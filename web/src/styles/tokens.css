@@ -7,6 +7,7 @@
   --muted: #8b98a5;
   --border: #2d3640;
   --accent: #58a6ff;
+  --on-accent: #0d1117;
   --danger: #ff6b6b;
   --warn: #e3a008;
   --ok: #3fb950;
@@ -21,7 +22,7 @@
   --ev-answer: #f0f6fc;
   --ev-summarize: #39c5cf;
   --ev-fallback: #ff6b6b;
-  --ev-unknown: #6e7781;
+  --ev-unknown: #8b98a5;
 
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -37,21 +38,22 @@
     --muted: #59636e;
     --border: #d0d7de;
     --accent: #0969da;
+    --on-accent: #ffffff;
     --danger: #cf222e;
     --warn: #9a6700;
     --ok: #1a7f37;
 
-    --ev-route: #8250df;
+    --ev-route: #7a45d6;
     --ev-thought: #59636e;
-    --ev-action: #0969da;
-    --ev-observation: #1a7f37;
+    --ev-action: #0860c9;
+    --ev-observation: #17722f;
     --ev-error: #cf222e;
-    --ev-plan: #9a6700;
-    --ev-critique: #bc4c00;
+    --ev-plan: #855900;
+    --ev-critique: #a64300;
     --ev-answer: #1f2328;
-    --ev-summarize: #0a7f8a;
+    --ev-summarize: #08707a;
     --ev-fallback: #cf222e;
-    --ev-unknown: #6e7781;
+    --ev-unknown: #59636e;
     color-scheme: light;
   }
 }

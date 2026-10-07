@@ -394,7 +394,7 @@ cartão percorre cada caminho e nunca dispara duas decisões.
   - nenhum estado final volta atrás (SC-004).
   - uma falha de rede na decisão volta a `pending` e acrescenta um item `error` logo depois.
 - [x] T043 [P] [US3] Escrever `web/src/chat/ApprovalCard.test.tsx` e um caso em `App.test.tsx`
-  (`describe("approval")`, para o filtro de quickstart §5):
+  (`describe("App · approval (US3)")`, coberto pelo filtro de quickstart §5):
   - o 202 mostra a descrição, a ferramenta, os argumentos (via `ArgsTree`) e os botões.
   - Aprovar chama `POST {api}/approvals/{id}` com `{decision:"approve"}`. O 200 mostra
     "aprovado" e uma resposta com "ver raciocínio".
@@ -429,29 +429,29 @@ implementar `contracts/approval-flow.md`.
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T047 [P] `.env.example`: `OPSPILOT_CORS_ORIGINS=` com comentário (formato, default
+- [x] T047 [P] `.env.example`: `OPSPILOT_CORS_ORIGINS=` com comentário (formato, default
   `http://localhost:5173`, e que a preview em `4173` precisa entrar na lista)
-- [ ] T048 [P] `README.md`:
+- [x] T048 [P] `README.md`:
   - seção "War room" com o que é, `npm --prefix web install`, `dev`, `build`, `preview`,
     `/opspilot/`, `VITE_OPSPILOT_API_URL`, engrenagem, CORS e o fato de que o 202 depende de
     uma feature futura.
   - em "Comandos", os scripts de `web/`.
   - em "Estrutura", `web/` e `src/domain/wire.ts`.
-- [ ] T049 [P] `.github/copilot-instructions.md`:
+- [x] T049 [P] `.github/copilot-instructions.md`:
   - na Stack, `web/` (Vite+React+TS, Vitest) e a regra de que os esquemas de resposta vivem em
     `src/domain/wire.ts` e que `src/domain/` só importa `zod`.
   - em Comandos, os portões de `web/`.
-- [ ] T050 [P] Emendas de contrato: notas "Emendado por `016-war-room-web`" em
+- [x] T050 [P] Emendas de contrato: notas "Emendado por `016-war-room-web`" em
   `specs/003-chat-http-api/contracts/chat-endpoint.md` (CORS, 202 proposto) e em
   `specs/014-request-tracing/contracts/chat-endpoint.md` (`X-Request-Id` exposto por CORS)
-- [ ] T051 Passada de acessibilidade e responsividade em `web/src/styles/app.css` e nos
+- [x] T051 Passada de acessibilidade e responsividade em `web/src/styles/app.css` e nos
   componentes:
   - rótulos, `aria-live="polite"` na lista de mensagens e foco visível.
   - em 375 px de largura, sem rolagem horizontal e com a gaveta em tela cheia.
   - contraste dos tokens nos dois temas.
-- [ ] T052 Rodar os portões completos: `npm run typecheck && npm test` e
+- [x] T052 Rodar os portões completos: `npm run typecheck && npm test` e
   `npm --prefix web run typecheck && npm --prefix web test`
-- [ ] T053 Rodar `specs/016-war-room-web/quickstart.md` §2 a §4 contra a API local e registrar o
+- [x] T053 Rodar `specs/016-war-room-web/quickstart.md` §2 a §4 contra a API local e registrar o
   resultado
 
 ---
@@ -528,3 +528,12 @@ Task: "One component per event type in web/src/trace/events/"
   `contracts/approval-flow.md` e a emenda, se precisar.
 - Commit por tarefa ou grupo lógico, com a mensagem terminando em `(016)`, como nas features
   anteriores.
+
+### Validação (T053, 2026-10-07)
+
+- **Portões**: API 671/671 e `tsc` limpo; `web/` 129/129, `tsc` limpo, build ok com `404.html` igual ao `index.html`.
+- **Quickstart §2 (CORS), contra a API real** (banco descartável, sem `.env`): preflight permitido deu 204 com os cabeçalhos; origem negada, 0 `Access-Control-*`; sem `Origin`, 0 `Access-Control-*`; `GET /stats` com `total` 0 depois dos preflights (CO2). Lista inválida (`nao-e-url`) encerra o servidor com código 1 e a mensagem nomeia o item.
+- **§4 (caminho base)**: o build servido pela preview carrega em `/opspilot/` e `/opspilot/index.html` (200), sem 404 de recurso. Foi achado e corrigido um `404` do `/favicon.ico` (ícone SVG embutido no `index.html`).
+- **§3, no que dá sem credencial de modelo**: num Chromium real, a war room buildada falou com a API real de outra origem (4173 → 3000). Sem modelo, o `/chat` respondeu 503 `model_unavailable`, que virou bolha legível com o `requestId`; sem rolagem horizontal a 375 px; sem erro de console além do 503.
+- **§3 (conversa, raciocínio, engrenagem) e §5 (aprovação), contra um stub descartável** fora do repositório, no mesmo navegador: engrenagem recusa URL inválida e a URL salva sobrevive a recarregar; os 11 eventos (inclusive um tipo desconhecido) aparecem na ordem recebida, nos temas escuro e claro e em 375 px, com a gaveta em largura total; Esc fecha e devolve o foco; o 202 vira cartão com o compositor bloqueado; duplo clique em Aprovar fez **uma** chamada de decisão.
+- **Não verificado**: uma conversa de 3 turnos com resposta real do modelo (§3 passos 1, 2 e 5 contra a API real), por falta de credencial de modelo neste ambiente. O fluxo está coberto pelos testes com `fetch` dublê e pelo stub acima. A US3 não pode ser validada contra a API real: ela ainda não responde 202.

@@ -56,6 +56,14 @@
 > não mudam. Ver
 > [`specs/014-request-tracing/contracts/chat-endpoint.md`](../../014-request-tracing/contracts/chat-endpoint.md)
 > e [`requests-endpoint.md`](../../014-request-tracing/contracts/requests-endpoint.md).
+>
+> **Emendado também por `016-war-room-web`**: a API passa a liberar o navegador (CORS) para as
+> origens de `OPSPILOT_CORS_ORIGINS`, em todas as rotas, expondo `X-Request-Id`; o preflight
+> não gera registro de pedido. Corpo, status e cabeçalhos de quem não envia `Origin` não
+> mudam. Fica **proposto** um `202` (`pending_approval`) para uma ação que espera decisão
+> humana, que hoje a API nunca emite. Ver
+> [`specs/016-war-room-web/contracts/cors.md`](../../016-war-room-web/contracts/cors.md) e
+> [`approval-flow.md`](../../016-war-room-web/contracts/approval-flow.md).
 
 O único endpoint da feature. Recebe um pedido em linguagem natural, executa uma estratégia
 de raciocínio e devolve o resultado da execução.

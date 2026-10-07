@@ -92,6 +92,14 @@ npm run memory:model
 # Portões de qualidade — offline, sem credenciais
 npm run typecheck
 npm test
+
+# War room (web/): instala, sobe em http://localhost:5173/opspilot/, gera o build
+# e roda os portões do pacote (offline, sem a API no ar). Requer `npm install` na raiz.
+npm --prefix web install
+npm --prefix web run dev
+npm --prefix web run build
+npm --prefix web run typecheck
+npm --prefix web test
 ```
 
 ```bash
@@ -396,6 +404,42 @@ continuam usando um estado em memória, semeado do zero a cada execução, para
 que comparações entre estratégias sempre partam do mesmo ponto — nenhum dos
 dois usa conversa, resumo ou memória.
 
+### War room (interface web)
+
+`web/` é uma interface de plantão (Vite + React + TypeScript) para conversar com o OpsPilot
+pelo navegador, sem `curl`. Ela fala com o `POST /chat` e mostra a conversa turno a turno.
+
+```bash
+npm install                      # raiz: a war room usa zod e src/domain/ de lá
+npm --prefix web install
+npm run dev                      # a API, em http://localhost:3000
+npm --prefix web run dev         # a war room, em http://localhost:5173/opspilot/
+```
+
+- **Ver raciocínio**: cada resposta tem um botão que abre o rastro daquele pedido, evento por
+  evento, com uma apresentação por tipo (rota, pensamento, ação com argumentos, observação,
+  plano, crítica, resumo, troca de modelo e resposta), mais o motivo de parada e as métricas
+  presentes. Um evento de tipo desconhecido aparece de forma genérica, sem quebrar o resto.
+- **Engrenagem**: troca a URL da API e a mantém ao recarregar a página (só isso fica no
+  navegador). O padrão é `VITE_OPSPILOT_API_URL` no momento do build, ou
+  `http://localhost:3000`.
+- **Caminho base `/opspilot/`**: `npm --prefix web run build` gera `web/dist/` pronto para
+  ser servido sob esse caminho (com `404.html` igual ao `index.html`, para hospedagens
+  estáticas). A preview do build roda em `http://localhost:4173/opspilot/`.
+- **CORS**: a API só libera as origens de `OPSPILOT_CORS_ORIGINS` (lista separada por
+  vírgula; padrão `http://localhost:5173`). A preview em `4173` precisa entrar na lista. Uma
+  lista inválida impede o servidor de subir. Chamadas sem `Origin` (`curl`, testes, MCP) não
+  mudam. O preflight não gera registro de pedido. Contrato:
+  [specs/016-war-room-web/contracts/cors.md](specs/016-war-room-web/contracts/cors.md).
+- **Aprovação (202)**: a war room já transforma um `202` do `/chat` num cartão
+  Aprovar/Negar (`POST /approvals/:id`), com uma decisão por cartão. **A API ainda não
+  responde 202**: o contrato está em
+  [specs/016-war-room-web/contracts/approval-flow.md](specs/016-war-room-web/contracts/approval-flow.md)
+  e o lado servidor é uma feature futura. Até lá, o cartão só é exercitado pelos testes.
+
+Os formatos que a API devolve e a war room lê (rastro, métricas, corpo do `/chat`, erro,
+ação pendente) estão definidos uma única vez, como esquemas zod, em `src/domain/wire.ts`.
+
 ### Memória semântica: custo em disco
 
 A busca por sentido (recuperar um fato mesmo sem nenhuma palavra em comum
@@ -468,14 +512,15 @@ validação) em [specs/006-mcp-server/](specs/006-mcp-server/).
 
 ```text
 src/
-├── domain/    # esquemas zod e erros de domínio (puro)
+├── domain/    # esquemas zod e erros de domínio (puro); wire.ts: os formatos
+│              # que a API devolve e a war room lê (só importa zod)
 ├── store/     # transições de estado puras + repositórios in-memory e SQLite
 │              # (sqlite-ops-store.ts, sqlite-schema.ts, db.ts) e o
 │              # ConversationStore de conversas e resumos (in-memory e SQLite)
 ├── lib/       # utilitários sem domínio: with-timeout.ts (raça contra prazo +
 │              # AbortSignal, compartilhado pelo refletor de aprendizado e
 │              # pelo sumarizador de histórico)
-├── trace/     # tipos e formatação do rastro de raciocínio (puro)
+├── trace/     # tipos (derivados de domain/wire.ts) e formatação do rastro (puro)
 ├── context/   # medição e composição de contexto (puro): estimateTokens
 │              # (caracteres÷4), inputTokensFromResult/sumPromptTokens
 │              # (tokens reais do usage_metadata do provedor),
@@ -509,8 +554,9 @@ src/
 │              # guarda — roda depois da resposta, nunca a atrasa)
 ├── http/      # POST /chat: createApp (server.ts), handler e schema (chat.ts),
 │              # corpo de erro consistente (errors.ts), middleware do
-│              # identificador do pedido (request-tracking.ts) e
-│              # GET /requests/:id (requests.ts)
+│              # identificador do pedido (request-tracking.ts),
+│              # GET /requests/:id (requests.ts) e CORS por lista de
+│              # origens (cors.ts)
 ├── obs/       # observabilidade: logger.ts (uma linha JSON por evento, só
 │              # metadados, contexto por pedido), request-store.ts (tabelas
 │              # requests e trace_events), request-record.ts (monta o registro),
@@ -521,6 +567,14 @@ src/
 ├── arena.ts   # CLI de comparação de estratégias (estado em memória)
 ├── bench.ts   # CLI de benchmark: 3 cenários x 2 estratégias, acerto por estado
 └── index.ts   # bootstrap: abre/semeia o banco SQLite, valida PORT e sobe a API HTTP
+
+web/           # war room (Vite + React + TS, base /opspilot/), pacote próprio
+├── src/api/       # cliente HTTP injetável e classificação das respostas
+├── src/state/     # reducer puro da conversa
+├── src/chat/      # lista de mensagens, compositor, erros, cartão de aprovação
+├── src/trace/     # gaveta do raciocínio: um componente por tipo de evento
+├── src/settings/  # engrenagem e URL da API
+└── src/styles/    # tokens de cor (escuro por padrão) e layout
 ```
 
 Na raiz do repositório, `scripts/conversa-longa.sh` (bash + `curl` + `jq`) é um
@@ -547,7 +601,8 @@ unificado com roteador) [specs/013-model-resilience/](specs/013-model-resilience
 (resiliência de modelo: nova tentativa, reserva e 503) e
 [specs/014-request-tracing/](specs/014-request-tracing/) (rastro persistido,
 `requestId` e logs JSON) e [specs/015-request-stats/](specs/015-request-stats/)
-(estatísticas: `GET /stats`).
+(estatísticas: `GET /stats`) e [specs/016-war-room-web/](specs/016-war-room-web/)
+(war room web, CORS e o contrato de aprovação).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 

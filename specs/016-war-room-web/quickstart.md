@@ -74,9 +74,9 @@ A API ainda não responde 202 ([approval-flow.md](./contracts/approval-flow.md),
 "proposto"). A US3 é validada pelos testes da war room:
 
 ```bash
-npm --prefix web test -- approval
+npm --prefix web test -- ApprovalCard conversation App
 ```
 
-Esperado: 202 vira cartão. Aprovar mostra a resposta final com "ver raciocínio". Negar mostra
+Esperado (o filtro seleciona o cartão, o reducer da conversa e os fluxos do `App`): 202 vira cartão. Aprovar mostra a resposta final com "ver raciocínio". Negar mostra
 "negado". Duplo clique faz uma chamada só. 409 mostra "Já decidida". O compositor fica bloqueado
 enquanto o cartão está pendente.
