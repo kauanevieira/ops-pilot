@@ -244,7 +244,7 @@ Phases 2 e 3.
 
 ### Tests for User Story 5
 
-- [ ] T026 [P] [US5] Escrever `src/http/cors.test.ts` (`node:test`) para as funções puras:
+- [x] T026 [P] [US5] Escrever `src/http/cors.test.ts` (`node:test`) para as funções puras:
   - `parseCorsOrigins(env)`: `undefined`/vazio dá `["http://localhost:5173"]`. Vírgulas e
     espaços são aceitos, e cada item é normalizado por `new URL(o).origin`. Um item com caminho,
     query, fragmento, esquema não-http(s) ou texto solto lança erro com o item no texto.
@@ -258,7 +258,7 @@ Phases 2 e 3.
     - preflight negado → `end: true`, 204, sem `Access-Control-*`.
     - comparação exata, sem curinga (`http://localhost:5173.evil.com` negado) (CO3).
     - nunca `Allow-Credentials` (CO4).
-- [ ] T027 [P] [US5] Acrescentar a `src/http/server.test.ts`, com `createApp({ corsOrigins:
+- [x] T027 [P] [US5] Acrescentar a `src/http/server.test.ts`, com `createApp({ corsOrigins:
   ["http://localhost:5173"], ... })` e os dublês existentes:
   - preflight de `POST /chat` com origem permitida → 204 com os cabeçalhos. Depois disso,
     `GET /stats` não conta nenhum pedido novo e o logger dublê não registra `request.*` (CO2).
@@ -271,18 +271,18 @@ Phases 2 e 3.
 
 ### Implementation for User Story 5
 
-- [ ] T028 [US5] Implementar `src/http/cors.ts` (depende de T026): `parseCorsOrigins`,
+- [x] T028 [US5] Implementar `src/http/cors.ts` (depende de T026): `parseCorsOrigins`,
   `corsDecision` (puras) e `createCors(allowlist): RequestHandler`, que aplica os cabeçalhos e
   responde 204 vazio quando `end` (preflight). Comentários com FR-023/024/025 e CO1–CO5.
-- [ ] T029 [US5] Em `src/http/server.ts` (depende de T028): `ChatAppDeps.corsOrigins?: string[]`,
+- [x] T029 [US5] Em `src/http/server.ts` (depende de T028): `ChatAppDeps.corsOrigins?: string[]`,
   com default `["http://localhost:5173"]` e JSDoc no mesmo padrão das outras deps.
   `app.use(createCors(corsOrigins))` vem **antes** de `app.post("/chat", …)` e das outras
   rotas. Rodar T027.
-- [ ] T030 [US5] Em `src/index.ts` (depende de T028): `resolveCorsOrigins()` lê
+- [x] T030 [US5] Em `src/index.ts` (depende de T028): `resolveCorsOrigins()` lê
   `process.env.OPSPILOT_CORS_ORIGINS` via `parseCorsOrigins`. Se for inválida, faz
   `console.error` com a mensagem e `process.exit(1)` (mesma regra de `resolveModelPrices`).
   Passar o resultado ao `createApp`.
-- [ ] T031 [US5] Rodar `npm run typecheck && npm test` na raiz: verdes
+- [x] T031 [US5] Rodar `npm run typecheck && npm test` na raiz: verdes
 
 **Checkpoint (MVP)**: com `npm run dev` e `npm --prefix web run dev`, uma conversa de 3 turnos
 funciona no navegador (quickstart §3 passos 1, 2 e 5).

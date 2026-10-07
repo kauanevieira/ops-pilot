@@ -14,6 +14,7 @@ import { baselineState } from "./store/seed.ts";
 import { createLogger } from "./obs/logger.ts";
 import { SqliteRequestStore } from "./obs/request-store.ts";
 import { readModelPrices } from "./obs/pricing.ts";
+import { parseCorsOrigins } from "./http/cors.ts";
 
 /**
  * `PORT` is external input like any other (a CLI flag, an HTTP body) and
@@ -42,9 +43,20 @@ function resolveModelPrices(): ModelPrices {
   }
 }
 
+/** 016-war-room-web: same rule as `PORT` — an invalid list refuses to start, loudly. */
+function resolveCorsOrigins(): string[] {
+  try {
+    return parseCorsOrigins(process.env.OPSPILOT_CORS_ORIGINS);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
+}
+
 function main(): void {
   const port = resolvePort();
   const modelPrices = resolveModelPrices();
+  const corsOrigins = resolveCorsOrigins();
 
   // Durable storage (FR-010): the API's composition root is the only
   // caller that opens OPSPILOT_DB — the arena and the bench stay on the
@@ -90,7 +102,7 @@ function main(): void {
   // `createApp` defaults to a silent logger so tests stay quiet (LG6).
   const logger = createLogger();
 
-  const app = createApp({ store, conversationStore, memoryStore, distiller, summarizer, router, requestStore, logger, modelPrices });
+  const app = createApp({ store, conversationStore, memoryStore, distiller, summarizer, router, requestStore, logger, modelPrices, corsOrigins });
 
   app.listen(port, () => {
     logger.info("server.listening", { port });
