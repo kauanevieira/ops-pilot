@@ -27,8 +27,8 @@ API e cliente HTTP) e depois uma fase por história, em ordem de prioridade.
 
 ## Phase 1: Setup
 
-- [ ] T001 Criar o branch `016-war-room-web` a partir de `main`
-- [ ] T002 Criar o pacote `web/` sem workspaces npm:
+- [x] T001 Criar o branch `016-war-room-web` a partir de `main`
+- [x] T002 Criar o pacote `web/` sem workspaces npm:
   - `web/package.json` com `"private": true`, `"type": "module"` e os scripts `dev`
     (`vite`), `build` (`vite build`), `preview` (`vite preview`), `test` (`vitest run`) e
     `typecheck` (`tsc --noEmit`).
@@ -37,25 +37,25 @@ API e cliente HTTP) e depois uma fase por história, em ordem de prioridade.
     `@testing-library/jest-dom`, `@types/react`, `@types/react-dom` e `typescript` (mesma major
     da raiz).
   - **não** declarar `zod` (research R-003).
-- [ ] T003 Criar `web/vite.config.ts` (depende de T002):
+- [x] T003 Criar `web/vite.config.ts` (depende de T002):
   - `base: "/opspilot/"`, `plugins: [react()]`.
   - `resolve.alias: { "@domain": path.resolve(__dirname, "../src/domain") }` e
     `server.fs.allow: [".."]`.
   - um plugin de build que, em `closeBundle`, copia `dist/index.html` para `dist/404.html`
     (research R-005).
   - `test: { environment: "jsdom", setupFiles: ["./src/test-setup.ts"] }`.
-- [ ] T004 [P] Criar `web/tsconfig.json` (depende de T002): `strict`, `jsx: "react-jsx"`,
+- [x] T004 [P] Criar `web/tsconfig.json` (depende de T002): `strict`, `jsx: "react-jsx"`,
   `moduleResolution: "Bundler"`, `allowImportingTsExtensions`, `noEmit`,
   `types: ["vite/client", "vitest/globals", "@testing-library/jest-dom"]`,
   `paths: { "@domain/*": ["../src/domain/*"] }`, `include: ["src", "../src/domain"]`, excluindo
   `../src/domain/**/*.test.ts`.
-- [ ] T005 [P] Criar `web/index.html` (título "OpsPilot · War Room", `<div id="root">`, script
+- [x] T005 [P] Criar `web/index.html` (título "OpsPilot · War Room", `<div id="root">`, script
   `/src/main.tsx`), `web/src/main.tsx` (monta `<App />` em `StrictMode`, importa os CSS),
   `web/src/App.tsx` provisório e `web/src/test-setup.ts` (importa
   `@testing-library/jest-dom/vitest`).
-- [ ] T006 [P] Criar `web/.env.example` com `VITE_OPSPILOT_API_URL=http://localhost:3000` e um
+- [x] T006 [P] Criar `web/.env.example` com `VITE_OPSPILOT_API_URL=http://localhost:3000` e um
   comentário. Acrescentar `web/node_modules/` e `web/dist/` ao `.gitignore` da raiz.
-- [ ] T007 [P] Criar `web/src/styles/tokens.css` e `web/src/styles/app.css` com a direção visual
+- [x] T007 [P] Criar `web/src/styles/tokens.css` e `web/src/styles/app.css` com a direção visual
   de research R-006:
   - variáveis em `:root` (`--bg`, `--surface`, `--surface-2`, `--text`, `--muted`, `--border`,
     `--accent`, `--danger`, `--warn`, `--ok`, `--font-ui`, `--font-mono`) e uma cor por tipo
@@ -68,7 +68,7 @@ API e cliente HTTP) e depois uma fase por história, em ordem de prioridade.
   - layout: coluna de conversa com no máximo 820 px, compositor fixo no rodapé, gaveta à direita
     a partir de 641 px e em tela cheia até 640 px, gutter de 16 px no celular, sem rolagem
     horizontal.
-- [ ] T008 Rodar `npm --prefix web install` e confirmar que `npm --prefix web run typecheck` e
+- [x] T008 Rodar `npm --prefix web install` e confirmar que `npm --prefix web run typecheck` e
   `npm --prefix web test -- --passWithNoTests` passam no esqueleto
 
 **Checkpoint**: `web/` sobe em `http://localhost:5173/opspilot/` com a página provisória.
