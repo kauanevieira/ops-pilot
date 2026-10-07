@@ -5,6 +5,10 @@
 O DDL é **texto literal**. Nenhuma parte dele é gerada, interpolada ou montada em tempo de
 execução (Princípio II; R-007).
 
+> **Emendado por `014-request-tracing`**: duas tabelas novas no mesmo arquivo, `requests` e
+> `trace_events`, criadas pelo construtor do `SqliteRequestStore`. Nada do esquema abaixo muda.
+> Ver [`specs/014-request-tracing/contracts/database-schema.md`](../../014-request-tracing/contracts/database-schema.md).
+
 ---
 
 ## DDL

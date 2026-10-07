@@ -199,6 +199,49 @@ falha aberta de sempre (recuam para `react`/seguem sem resumo novo) mesmo
 quando os dois modelos falham; só uma falha que impede a estratégia de
 responder vira 503.
 
+### Rastreando um pedido
+
+Toda resposta do `POST /chat`, de sucesso ou de erro (400, 404, 422, 500, 503,
+504, inclusive JSON malformado), traz um identificador único do pedido no
+cabeçalho `X-Request-Id` e em `requestId` no corpo — nos erros, como chave
+irmã de `error`. O identificador é sempre gerado pelo servidor (UUID v4): um
+`X-Request-Id` enviado pelo cliente é ignorado.
+
+Com o identificador, `GET /requests/:id` devolve o registro do pedido
+(chegada, duração, status, código de erro, estratégia e origem da escolha,
+chamadas ao modelo, tokens de entrada, modelo que respondeu) e o rastro
+completo, na ordem original, com o `nodeName` e o conteúdo de cada evento.
+Pedido que terminou em erro tem registro com rastro vazio; id inexistente é
+`404 request_not_found`. Tudo fica no mesmo arquivo `OPSPILOT_DB` (tabelas
+`requests` e `trace_events`, criadas na abertura) e sobrevive a reiniciar o
+servidor.
+
+```bash
+ID=$(curl -s -X POST http://localhost:3000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "quais alertas estão disparando?"}' | jq -r .requestId)
+
+curl -s http://localhost:3000/requests/$ID | jq '.request, (.trace | map({type, nodeName}))'
+```
+
+O servidor HTTP escreve **uma linha JSON por acontecimento** na saída padrão
+(`{"ts","level","event","requestId",...}`): início e fim de cada pedido (com
+status, duração, estratégia, chamadas ao modelo, tokens e modelo), uma linha
+por evento do rastro (só tipo, nó e posição), e as falhas tratadas sem erro
+para o cliente — roteador, memória semântica, sumarização, refletor de
+aprendizado e troca de modelo — com o `requestId` do pedido. Os logs levam só
+metadados: nunca o texto da mensagem, da resposta, de argumentos de ferramenta
+ou de observações, nem a mensagem de erro do provedor. Por isso um `500` loga
+só o nome da classe do erro, sem pilha; o `requestId` leva ao rastro e à
+conversa salvos. Catálogo de eventos em
+[specs/014-request-tracing/contracts/log-format.md](specs/014-request-tracing/contracts/log-format.md).
+Arena, bench e o servidor MCP não mudam: não têm identificador, registro nem
+essas linhas.
+
+```bash
+npm run dev | jq -c 'select(.requestId) | {event, requestId, status}'
+```
+
 `conversationId` continua uma conversa: as até 8 mensagens mais recentes
 daquela conversa (mensagem de quem pediu + resposta final, alternadas) são
 entregues ao agente na íntegra, antes da mensagem nova. Omitido, uma conversa
@@ -445,7 +488,12 @@ src/
 │              # learning-reflector.ts (refletor: examina, barra segredo,
 │              # guarda — roda depois da resposta, nunca a atrasa)
 ├── http/      # POST /chat: createApp (server.ts), handler e schema (chat.ts),
-│              # corpo de erro consistente (errors.ts)
+│              # corpo de erro consistente (errors.ts), middleware do
+│              # identificador do pedido (request-tracking.ts) e
+│              # GET /requests/:id (requests.ts)
+├── obs/       # observabilidade: logger.ts (uma linha JSON por evento, só
+│              # metadados, contexto por pedido), request-store.ts (tabelas
+│              # requests e trace_events) e request-record.ts (monta o registro)
 ├── scripts/   # comando de seed (grava no banco SQLite)
 ├── bench/     # cenários e verificação de acerto do benchmark (puro)
 ├── arena.ts   # CLI de comparação de estratégias (estado em memória)
@@ -473,8 +521,10 @@ de aprendizado), [specs/010-context-measurement/](specs/010-context-measurement/
 (medição de contexto),
 [specs/011-history-summarization/](specs/011-history-summarization/) (sumarização
 de histórico), [specs/012-unified-graph/](specs/012-unified-graph/) (grafo
-unificado com roteador) e [specs/013-model-resilience/](specs/013-model-resilience/)
-(resiliência de modelo: nova tentativa, reserva e 503).
+unificado com roteador) [specs/013-model-resilience/](specs/013-model-resilience/)
+(resiliência de modelo: nova tentativa, reserva e 503) e
+[specs/014-request-tracing/](specs/014-request-tracing/) (rastro persistido,
+`requestId` e logs JSON).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 
