@@ -1,7 +1,8 @@
-import { useMemo, useReducer, useState } from "react";
+import { useMemo, useReducer, useRef, useState } from "react";
 import { createApiClient } from "./api/client.ts";
 import { Composer } from "./chat/Composer.tsx";
 import { toDisplayError } from "./chat/errors.ts";
+import type { ApprovalDecision } from "@domain/wire.ts";
 import { MessageList } from "./chat/MessageList.tsx";
 import { DEFAULT_API_URL } from "./api/url.ts";
 import { loadApiUrl, resetApiUrl, saveApiUrl, type ApiUrlSetting } from "./settings/api-url-store.ts";
@@ -16,6 +17,13 @@ interface Props {
   newId?: () => string;
   now?: () => Date;
 }
+
+/** contracts/approval-flow.md: the API refused the decision itself — the card closes (FR-015). */
+const REJECTION_REASONS: Record<number, string> = {
+  404: "Pendência não encontrada",
+  409: "Já decidida",
+  410: "Expirou",
+};
 
 function browserStorage(): Storage | null {
   try {
@@ -47,11 +55,49 @@ export function App(props: Props) {
     const at = now().toISOString();
     if (outcome.kind === "answered") {
       dispatch({ type: "answered", id: newId(), result: outcome.result, at });
-    } else if (outcome.kind === "pending" || outcome.kind === "denied") {
-      // US3 handles a 202 (a card); until then it is not something this screen can show.
-      dispatch({ type: "failed", id: newId(), error: toDisplayError({ kind: "malformed", status: 202 }), retryText: text, at });
+    } else if (outcome.kind === "pending") {
+      dispatch({ type: "pending", id: newId(), accepted: outcome.accepted, at });
+    } else if (outcome.kind === "denied") {
+      // Only a decision can be denied; a `/chat` answer shaped like one is not what the contract says.
+      dispatch({ type: "failed", id: newId(), error: toDisplayError({ kind: "malformed", status: 200 }), retryText: text, at });
     } else {
       dispatch({ type: "failed", id: newId(), error: toDisplayError(outcome), retryText: text, at });
+    }
+  }
+
+  /** UI2: one decision call per card, even if the button is hit again before the re-render. */
+  const decidingIds = useRef(new Set<string>());
+
+  async function decide(itemId: string, decision: ApprovalDecision) {
+    const item = state.items.find((i) => i.id === itemId);
+    if (item?.kind !== "approval" || item.state.status !== "pending") return;
+    if (decidingIds.current.has(itemId)) return;
+    decidingIds.current.add(itemId);
+    dispatch({ type: "decide", itemId, decision });
+    try {
+      const outcome = await client.decide(item.pending.approval.id, decision);
+      const at = now().toISOString();
+      if (outcome.kind === "answered") {
+        dispatch({
+          type: "decided",
+          itemId,
+          outcome: { kind: "approved", next: { kind: "answer", id: newId(), result: outcome.result, at } },
+        });
+      } else if (outcome.kind === "pending") {
+        dispatch({
+          type: "decided",
+          itemId,
+          outcome: { kind: "approved", next: { kind: "approval", id: newId(), accepted: outcome.accepted, at } },
+        });
+      } else if (outcome.kind === "denied") {
+        dispatch({ type: "decided", itemId, outcome: { kind: "denied" } });
+      } else if (outcome.kind === "api-error" && outcome.status in REJECTION_REASONS) {
+        dispatch({ type: "decided", itemId, outcome: { kind: "rejected", reason: REJECTION_REASONS[outcome.status]! } });
+      } else {
+        dispatch({ type: "decisionFailed", itemId, errorId: newId(), error: toDisplayError(outcome), at });
+      }
+    } finally {
+      decidingIds.current.delete(itemId);
     }
   }
 
@@ -101,6 +147,7 @@ export function App(props: Props) {
         retryItemId={retryItemId}
         onRetry={(text) => void send(text)}
         onNewConversation={reset}
+        onDecide={(itemId, decision) => void decide(itemId, decision)}
         onShowTrace={setTraceItemId}
       />
       {traced?.kind === "answer" && <TraceDrawer result={traced.result} onClose={() => setTraceItemId(null)} />}

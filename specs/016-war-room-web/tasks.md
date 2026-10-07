@@ -386,14 +386,14 @@ cartão percorre cada caminho e nunca dispara duas decisões.
 
 ### Tests for User Story 3
 
-- [ ] T042 [P] [US3] Acrescentar a `web/src/state/conversation.test.ts`:
+- [x] T042 [P] [US3] Acrescentar a `web/src/state/conversation.test.ts`:
   - `pending` acrescenta um `approval{pending}`, guarda `conversationId` e faz
     `canSend === false`.
   - `decide` só sai de `pending` (um segundo `decide` é ignorado) e liga `inFlight`.
   - `decided` leva a `approved` mais um item `answer`, ou a `denied`, ou a `rejected{reason}`.
   - nenhum estado final volta atrás (SC-004).
   - uma falha de rede na decisão volta a `pending` e acrescenta um item `error` logo depois.
-- [ ] T043 [P] [US3] Escrever `web/src/chat/ApprovalCard.test.tsx` e um caso em `App.test.tsx`
+- [x] T043 [P] [US3] Escrever `web/src/chat/ApprovalCard.test.tsx` e um caso em `App.test.tsx`
   (`describe("approval")`, para o filtro de quickstart §5):
   - o 202 mostra a descrição, a ferramenta, os argumentos (via `ArgsTree`) e os botões.
   - Aprovar chama `POST {api}/approvals/{id}` com `{decision:"approve"}`. O 200 mostra
@@ -406,13 +406,13 @@ cartão percorre cada caminho e nunca dispara duas decisões.
 
 ### Implementation for User Story 3
 
-- [ ] T044 [US3] Em `web/src/state/conversation.ts` (depende de T042): ações `pending`,
+- [x] T044 [US3] Em `web/src/state/conversation.ts` (depende de T042): ações `pending`,
   `decide`, `decided` e `decisionFailed`, com as transições e invariantes de data-model.md
-- [ ] T045 [P] [US3] Implementar `web/src/chat/ApprovalCard.tsx` (depende de T043, T035):
+- [x] T045 [P] [US3] Implementar `web/src/chat/ApprovalCard.tsx` (depende de T043, T035):
   borda âmbar, descrição, `tool`, `ArgsTree(args)`, `expiresAt` quando houver, e Aprovar
   (primário) e Negar (secundário), desabilitados fora de `pending`. Nos estados finais vira o
   selo "aprovado", "negado" ou "recusado: <motivo>".
-- [ ] T046 [US3] Em `web/src/App.tsx` e `web/src/chat/MessageList.tsx` (depende de T044, T045):
+- [x] T046 [US3] Em `web/src/App.tsx` e `web/src/chat/MessageList.tsx` (depende de T044, T045):
   - `sendChat` com `pending` despacha a ação `pending`.
   - a decisão chama `client.decide` e mapeia o resultado: `answered` → `decided(approved)` mais
     `answer`; `approvalDeniedSchema` → `denied`; `pending` → novo cartão; `api-error`

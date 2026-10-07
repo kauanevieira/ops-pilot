@@ -317,3 +317,149 @@ describe("App · API URL gear (US4)", () => {
     expect(await screen.findByText(/Não foi possível falar com a API em http:\/\/localhost:3999/)).toBeInTheDocument();
   });
 });
+
+const ACCEPTED_BODY = {
+  status: "pending_approval",
+  requestId: "r2",
+  conversationId: "c1",
+  approval: {
+    id: "ap-1",
+    tool: "resolve_incident",
+    args: { incidentId: "INC-42" },
+    description: "Resolver o incidente INC-42.",
+  },
+};
+
+const DENIED_BODY = { status: "denied", approvalId: "ap-1", conversationId: "c1", requestId: "r3" };
+
+async function askForApproval(text = "resolve o INC-42") {
+  await userEvent.type(box(), text);
+  await userEvent.click(sendButton());
+  await screen.findByText(/Resolver o incidente INC-42/);
+}
+
+const approve = () => screen.getByRole("button", { name: "Aprovar" });
+const deny = () => screen.getByRole("button", { name: "Negar" });
+
+describe("App · approval (US3)", () => {
+  it("a 202 becomes a card, and the composer stays blocked until it is decided", async () => {
+    setup(() => json(202, ACCEPTED_BODY));
+    await askForApproval();
+
+    expect(screen.getByText("resolve_incident")).toBeInTheDocument();
+    expect(approve()).toBeEnabled();
+    expect(box()).toBeDisabled();
+    expect(sendButton()).toBeDisabled();
+  });
+
+  it("approve posts the decision and the final answer follows with its own trace", async () => {
+    const { fetchMock } = setup((call) =>
+      call === 1
+        ? json(202, ACCEPTED_BODY)
+        : json(200, { ...answer("c1", "INC-42 resolvido"), trace: [{ type: "answer", content: "INC-42 resolvido" }] }),
+    );
+    await askForApproval();
+    await userEvent.click(approve());
+
+    expect(await screen.findByText("INC-42 resolvido")).toBeInTheDocument();
+    expect(screen.getByText("aprovado")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Aprovar" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /ver raciocínio/i })).toBeInTheDocument();
+    expect(box()).toBeEnabled();
+
+    const [url, init] = fetchMock.mock.calls[1]!;
+    expect(url).toBe("http://localhost:3000/approvals/ap-1");
+    expect(JSON.parse(init.body as string)).toEqual({ decision: "approve" });
+  });
+
+  it("deny shows negado, runs nothing and frees the composer", async () => {
+    const { fetchMock } = setup((call) => (call === 1 ? json(202, ACCEPTED_BODY) : json(200, DENIED_BODY)));
+    await askForApproval();
+    await userEvent.click(deny());
+
+    expect(await screen.findByText("negado")).toBeInTheDocument();
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body as string)).toEqual({ decision: "deny" });
+    expect(box()).toBeEnabled();
+  });
+
+  it("a double click makes a single decision call (UI2)", async () => {
+    let release!: (r: Response) => void;
+    const { fetchMock } = setup((call) =>
+      call === 1 ? json(202, ACCEPTED_BODY) : new Promise<Response>((resolve) => (release = resolve)),
+    );
+    await askForApproval();
+
+    await userEvent.dblClick(approve());
+    expect(fetchMock).toHaveBeenCalledTimes(2); // /chat + one decision
+    expect(approve()).toBeDisabled();
+    expect(deny()).toBeDisabled();
+
+    release(json(200, answer("c1", "feito")));
+    await screen.findByText("feito");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [404, "approval_not_found", "Pendência não encontrada"],
+    [409, "approval_already_decided", "Já decidida"],
+    [410, "approval_expired", "Expirou"],
+  ])("a %i from the API closes the card with its reason (FR-015)", async (status, code, reason) => {
+    setup((call) => (call === 1 ? json(202, ACCEPTED_BODY) : json(status, { error: { code, message: "x" } })));
+    await askForApproval();
+    await userEvent.click(approve());
+
+    expect(await screen.findByText("recusado")).toBeInTheDocument();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Aprovar" })).not.toBeInTheDocument();
+    expect(box()).toBeEnabled();
+  });
+
+  it("a second 202 after approving shows a new card and keeps the first as approved", async () => {
+    setup((call) =>
+      call === 1
+        ? json(202, ACCEPTED_BODY)
+        : json(202, {
+            ...ACCEPTED_BODY,
+            approval: { ...ACCEPTED_BODY.approval, id: "ap-2", description: "Notificar o time." },
+          }),
+    );
+    await askForApproval();
+    await userEvent.click(approve());
+
+    expect(await screen.findByText(/Notificar o time/)).toBeInTheDocument();
+    expect(screen.getByText("aprovado")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Aprovar" })).toHaveLength(1);
+    expect(box()).toBeDisabled();
+  });
+
+  it("a network failure on the decision brings the card back and shows the error", async () => {
+    setup((call) => {
+      if (call === 1) return json(202, ACCEPTED_BODY);
+      throw new TypeError("Failed to fetch");
+    });
+    await askForApproval();
+    await userEvent.click(approve());
+
+    expect(await screen.findByText(/Não foi possível falar com a API/)).toBeInTheDocument();
+    expect(approve()).toBeEnabled();
+    expect(box()).toBeDisabled();
+  });
+
+  it("a 500 on the decision brings the card back and shows the error", async () => {
+    setup((call) => (call === 1 ? json(202, ACCEPTED_BODY) : json(500, { error: { code: "internal", message: "x" } })));
+    await askForApproval();
+    await userEvent.click(approve());
+
+    expect(await screen.findByText(/Erro interno da API/)).toBeInTheDocument();
+    expect(approve()).toBeEnabled();
+  });
+
+  it("a malformed 202 is a readable error, never a broken card", async () => {
+    setup(() => json(202, { status: "pending_approval", requestId: "r2" }));
+    await userEvent.type(box(), "resolve");
+    await userEvent.click(sendButton());
+
+    expect(await screen.findByText(/formato inesperado/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Aprovar" })).not.toBeInTheDocument();
+  });
+});

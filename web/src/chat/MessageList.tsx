@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { parseTrace } from "../trace/parse-trace.ts";
 import type { ConversationItem } from "../state/conversation.ts";
+import { ApprovalCard } from "./ApprovalCard.tsx";
 import { ErrorBubble } from "./ErrorBubble.tsx";
 
 interface Props {
@@ -9,6 +10,8 @@ interface Props {
   retryItemId: string | null;
   onRetry: (text: string) => void;
   onNewConversation: () => void;
+  /** US3: the person's decision on a pending card. */
+  onDecide: (itemId: string, decision: "approve" | "deny") => void;
   /** US2: opens the trace of an answer. */
   onShowTrace?: (itemId: string) => void;
 }
@@ -21,7 +24,7 @@ function strategyOf(trace: unknown[]): string | null {
   return null;
 }
 
-export function MessageList({ items, retryItemId, onRetry, onNewConversation, onShowTrace }: Props) {
+export function MessageList({ items, retryItemId, onRetry, onNewConversation, onDecide, onShowTrace }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: "end" });
@@ -67,7 +70,9 @@ export function MessageList({ items, retryItemId, onRetry, onNewConversation, on
                 />
               );
             case "approval":
-              return null; // US3
+              return (
+                <ApprovalCard key={item.id} id={item.id} pending={item.pending} state={item.state} onDecide={onDecide} />
+              );
           }
         })}
         <div ref={endRef} />
