@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
-import { toErrorBody, zodIssuesToDetails } from "./errors.ts";
+import { toErrorBody, withRequestId, zodIssuesToDetails } from "./errors.ts";
 
 describe("toErrorBody", () => {
   it("omits `details` entirely when not given", () => {
@@ -51,5 +51,15 @@ describe("zodIssuesToDetails", () => {
     if (result.success) return;
     const details = zodIssuesToDetails(result.error.issues);
     assert.equal(details[0]?.path, "message");
+  });
+});
+
+describe("withRequestId (014, FR-003)", () => {
+  it("adds requestId as a sibling of error and leaves error intact", () => {
+    const body = toErrorBody("timeout", "demorou", { x: 1 });
+    const out = withRequestId(body, "req-1");
+    assert.deepEqual(out.error, body.error);
+    assert.equal(out.requestId, "req-1");
+    assert.deepEqual(Object.keys(out).sort(), ["error", "requestId"]);
   });
 });

@@ -1,4 +1,5 @@
-import type { NodeName, Route, RouteSource, FailureKind } from "../domain/schemas.ts";
+import type { z } from "zod";
+import type { NodeName, Route, RouteSource, FailureKind, TraceEventType, stoppedReasonSchema } from "../domain/schemas.ts";
 
 export type TraceEvent = (
   | { type: "thought"; content: string }
@@ -141,7 +142,7 @@ export interface ContextBreakdown {
  * union — no existing switch over StoppedReason is exhaustive (format.ts
  * interpolates it), so this cannot break the base strategies.
  */
-export type StoppedReason = "completed" | "max-iterations" | "max-steps" | "max-reflections";
+export type StoppedReason = z.infer<typeof stoppedReasonSchema>;
 
 export interface StrategyResult {
   answer: string;
@@ -149,3 +150,15 @@ export interface StrategyResult {
   metrics: RunMetrics;
   stoppedReason: StoppedReason;
 }
+
+/**
+ * 014-request-tracing: compile-time guard that `traceEventTypeSchema` (and
+ * with it the `trace_events.type` CHECK) lists exactly the event types of
+ * `TraceEvent`. Adding a union member without updating the enum fails here.
+ */
+type _TraceTypesInSync = [TraceEvent["type"]] extends [TraceEventType]
+  ? [TraceEventType] extends [TraceEvent["type"]]
+    ? true
+    : never
+  : never;
+export const traceTypesInSync: _TraceTypesInSync = true;

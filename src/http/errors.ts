@@ -1,22 +1,13 @@
 import type { z } from "zod";
+import type { ChatErrorCode } from "../domain/schemas.ts";
 
 /**
  * Machine-readable discriminator for every error `POST /chat` can respond
- * with (FR-016). A client branches on `code`, not on parsing `message`.
+ * with (FR-016) — the closed set lives in `chatErrorCodeSchema` (014) so the
+ * `requests.error_code` CHECK and this type share one definition. A client
+ * branches on `code`, not on parsing `message`.
  */
-export type ChatErrorCode =
-  | "invalid_body"
-  | "unknown_strategy"
-  | "conversation_not_found"
-  | "timeout"
-  | "internal"
-  /**
-   * 013-model-resilience, FR-018: the strategy couldn't be answered by any
-   * model it tried (primary, and the backup if configured) — distinct from
-   * `internal`, which stays reserved for a defect in OpsPilot itself. Maps
-   * to a 503, never 500.
-   */
-  | "model_unavailable";
+export type { ChatErrorCode };
 
 export interface ValidationIssue {
   path: string;
@@ -54,4 +45,12 @@ export function zodIssuesToDetails(issues: readonly z.core.$ZodIssue[]): Validat
     message: issue.message,
     code: issue.code,
   }));
+}
+
+/**
+ * 014-request-tracing, FR-003: adds the request id as a sibling of `error`,
+ * leaving every existing error field untouched (FR-026).
+ */
+export function withRequestId<T extends ChatErrorResponse>(body: T, requestId: string): T & { requestId: string } {
+  return { ...body, requestId };
 }

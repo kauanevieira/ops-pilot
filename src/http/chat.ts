@@ -8,7 +8,11 @@ import { ConversationNotFoundError } from "../domain/errors.ts";
 import { userIdSchema } from "../domain/schemas.ts";
 import type { MemoryStore } from "../memory/memory-store.ts";
 import type { LearningReflector, LearningOutcome } from "../memory/learning-reflector.ts";
-import { toErrorBody, zodIssuesToDetails } from "./errors.ts";
+import { toErrorBody, withRequestId, zodIssuesToDetails } from "./errors.ts";
+import { getObs, persistRequest, type RequestObs } from "./request-tracking.ts";
+import type { ChatErrorCode } from "../domain/schemas.ts";
+import { runWithRequestContext, type LogFields, type Logger } from "../obs/logger.ts";
+import type { RequestStore } from "../obs/request-store.ts";
 import { SUMMARY_TIMEOUT_MS } from "../context/conversation-context.ts";
 import type { Summarizer } from "../context/summarizer.ts";
 import { createProductionGraph, isOverride, type OverrideChoice } from "../agents/production-graph.ts";
@@ -39,8 +43,11 @@ export const chatRequestSchema = z.object({
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 
-/** `StrategyResult` plus the conversation the turn belongs to (FR-011). */
-export type ChatResponse = StrategyResult & { conversationId: string };
+/**
+ * `StrategyResult` plus the conversation the turn belongs to (FR-011) and,
+ * from 014-request-tracing, the id of this request (FR-003).
+ */
+export type ChatResponse = StrategyResult & { conversationId: string; requestId: string };
 
 export interface CreateChatHandlerOptions {
   store: OpsRepository;
@@ -69,6 +76,29 @@ export interface CreateChatHandlerOptions {
   router: Router;
   /** 012-unified-graph, FR-011: default ROUTER_TIMEOUT_MS (15s); injected short in tests. */
   routerTimeoutMs?: number;
+  /** 014-request-tracing: durable request record + trace (FR-006 to FR-012). */
+  requestStore: RequestStore;
+  /** 014-request-tracing: one JSON line per event, metadata only (FR-019 to FR-023). */
+  logger: Logger;
+  /** 014-request-tracing: injectable clock for the record's duration. */
+  now: () => Date;
+}
+
+/**
+ * Metadata for the `request.end` line of a successful request (FR-021):
+ * only what exists, only numbers and names — never content (FR-023).
+ */
+function successSummary(result: StrategyResult): LogFields {
+  const route = result.trace.find((event) => event.type === "route");
+  const { llmCalls, promptTokens, modelUsed } = result.metrics;
+  return {
+    stoppedReason: result.stoppedReason,
+    llmCalls,
+    traceEvents: result.trace.length,
+    ...(route ? { strategy: route.strategy, routeSource: route.source } : {}),
+    ...(promptTokens !== undefined ? { promptTokens } : {}),
+    ...(modelUsed !== undefined ? { modelUsed } : {}),
+  };
 }
 
 /**
@@ -100,6 +130,9 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
     summaryTimeoutMs = SUMMARY_TIMEOUT_MS,
     router,
     routerTimeoutMs = ROUTER_TIMEOUT_MS,
+    requestStore,
+    logger,
+    now,
   } = options;
 
   // Compiled once per handler (research R-001), not per request — the
@@ -117,11 +150,31 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
   });
 
   return (req, res, next) => {
-    const parsed = chatRequestSchema.safeParse(req.body);
+    const obs = getObs(res);
+    if (!obs) throw new Error("createChatHandler precisa do middleware requestTracking antes dele.");
+    // 014-request-tracing (research R-003): the context is opened HERE, not
+    // in the middleware — the body parser sits between them and
+    // AsyncLocalStorage doesn't survive its stream events. Every promise
+    // continuation created below, including the learning reflector that
+    // fires after the response, inherits it.
+    runWithRequestContext({ requestId: obs.requestId, logger }, () => handle(obs, req.body, res, next));
+  };
+
+  function handle(
+    obs: RequestObs,
+    body: unknown,
+    res: Parameters<RequestHandler>[1],
+    next: Parameters<RequestHandler>[2],
+  ): void {
+    /** One place that answers an error: records the code for the `finish` hook and adds `requestId` (R-011). */
+    const sendError = (status: number, code: ChatErrorCode, message: string, details?: unknown): void => {
+      obs.errorCode = code;
+      res.status(status).json(withRequestId(toErrorBody(code, message, details), obs.requestId));
+    };
+
+    const parsed = chatRequestSchema.safeParse(body);
     if (!parsed.success) {
-      res
-        .status(400)
-        .json(toErrorBody("invalid_body", "Corpo da requisição inválido.", zodIssuesToDetails(parsed.error.issues)));
+      sendError(400, "invalid_body", "Corpo da requisição inválido.", zodIssuesToDetails(parsed.error.issues));
       return;
     }
 
@@ -131,6 +184,7 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
     // boundary), but these primitive/string values, once assigned, need
     // no further narrowing.
     const { message, conversationId, userId } = parsed.data;
+    obs.body = { ...(conversationId ? { conversationId } : {}), ...(userId ? { userId } : {}) };
 
     // 012-unified-graph (R-003, FR-015, FR-016): `strategy`/`reflect` in
     // the request impose the choice and skip the router entirely. The 422
@@ -144,9 +198,7 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
         strategy = resolveStrategy({ name: parsed.data.strategy, reflect: parsed.data.reflect }, store);
       } catch (error) {
         if (error instanceof UnknownStrategyError) {
-          res
-            .status(422)
-            .json(toErrorBody("unknown_strategy", error.message, { validStrategies: error.validStrategies }));
+          sendError(422, "unknown_strategy", error.message, { validStrategies: error.validStrategies });
           return;
         }
         next(error);
@@ -167,9 +219,7 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
       if (conversationId) conversationStore.countMessages(conversationId);
     } catch (error) {
       if (error instanceof ConversationNotFoundError) {
-        res
-          .status(404)
-          .json(toErrorBody("conversation_not_found", error.message, { conversationId: error.conversationId }));
+        sendError(404, "conversation_not_found", error.message, { conversationId: error.conversationId });
         return;
       }
       next(error);
@@ -205,7 +255,7 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
         if (res.headersSent) return;
         if (outcome.kind === "timeout") {
           controller.abort();
-          res.status(504).json(toErrorBody("timeout", `A execução excedeu o tempo limite de ${timeoutMs}ms.`));
+          sendError(504, "timeout", `A execução excedeu o tempo limite de ${timeoutMs}ms.`);
           return;
         }
 
@@ -220,8 +270,24 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
           { role: "assistant", content: result.answer },
         ]);
 
-        const body: ChatResponse = { ...result, conversationId: resolvedConversationId };
-        res.status(200).json(body);
+
+        // 014-request-tracing, FR-011/FR-012: the record and the trace are
+        // written BEFORE the response, so a lookup right after the 200
+        // finds them, and a failed write (logged inside `persistRequest`)
+        // changes nothing the client sees — the turn above is already
+        // recorded and the reflector below still fires.
+        persistRequest(
+          { requestStore, logger, now },
+          obs,
+          { status: 200, errorCode: null, conversationId: resolvedConversationId, userId: userId ?? null, result },
+        );
+        result.trace.forEach((event, position) => {
+          logger.info("trace.event", { position, type: event.type, nodeName: event.nodeName ?? null });
+        });
+        obs.summary = successSummary(result);
+
+        const responseBody: ChatResponse = { ...result, conversationId: resolvedConversationId, requestId: obs.requestId };
+        res.status(200).json(responseBody);
 
         // 009-learning-reflector, FR-001 to FR-003: fired only here, AFTER
         // the response body was handed to Express — never awaited, so it
@@ -244,12 +310,10 @@ export function createChatHandler(options: CreateChatHandlerOptions): RequestHan
         // detail stays out of the response (it was already logged where
         // `resilient` produced this error).
         if (error instanceof ModelUnavailableError) {
-          res
-            .status(503)
-            .json(toErrorBody("model_unavailable", "Nenhum modelo disponível para atender o pedido. Tente novamente em instantes."));
+          sendError(503, "model_unavailable", "Nenhum modelo disponível para atender o pedido. Tente novamente em instantes.");
           return;
         }
         next(error);
       });
-  };
+  }
 }

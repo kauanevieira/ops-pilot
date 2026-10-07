@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { logInRequest } from "../obs/logger.ts";
 import { ChatOpenAI } from "@langchain/openai";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { RunnableLambda, type Runnable, type RunnableConfig } from "@langchain/core/runnables";
@@ -231,10 +232,16 @@ export function resilient<RunInput, RunOutput>(
       if (error instanceof PrimarySkippedError) throw error;
       const kind = classifyModelError(error);
       if (kind === "aborted" || !RETRYABLE_FAILURES.has(kind)) {
-        console.error(`Modelo principal (${primaryId}) falhou (${kind}); sem nova tentativa:`, error);
+        logInRequest(
+          (log) => log.warn("model.failed", { model: primaryId ?? "?", failureKind: kind }),
+          () => console.error(`Modelo principal (${primaryId}) falhou (${kind}); sem nova tentativa:`, error),
+        );
         throw error;
       }
-      console.error(`Modelo principal (${primaryId}) falhou (${kind}); tentando de novo:`, error);
+      logInRequest(
+        (log) => log.warn("model.retry", { model: primaryId ?? "?", failureKind: kind }),
+        () => console.error(`Modelo principal (${primaryId}) falhou (${kind}); tentando de novo:`, error),
+      );
     },
   });
 
@@ -258,7 +265,10 @@ export function resilient<RunInput, RunOutput>(
       const reason = failureKindSchema.parse(classifyModelError(lastPrimaryError));
       if (scope) scope.primaryDown = true;
       await dispatchCustomEvent(MODEL_FALLBACK_EVENT, { from: primaryId, to: backup.id, reason }, config);
-      console.error(`Trocando para o modelo reserva (${backup.id}) após falha do principal (${primaryId}):`, lastPrimaryError);
+      logInRequest(
+        (log) => log.warn("model.fallback", { from: primaryId ?? "?", to: backup.id, reason }),
+        () => console.error(`Trocando para o modelo reserva (${backup.id}) após falha do principal (${primaryId}):`, lastPrimaryError),
+      );
     }
     try {
       const output = await build(backup.model).invoke(input, config);
@@ -281,11 +291,19 @@ export function resilient<RunInput, RunOutput>(
     } catch (error) {
       if (classifyModelError(error, config?.signal) === "aborted") throw error;
       if (backupId !== undefined) {
-        console.error(`Modelo reserva (${backupId}) também falhou:`, lastBackupError ?? error);
-        throw new ModelUnavailableError([primaryId ?? "?", backupId], failureKindSchema.parse(classifyModelError(lastBackupError ?? error)));
+        const failureKind = failureKindSchema.parse(classifyModelError(lastBackupError ?? error));
+        logInRequest(
+          (log) => log.error("model.unavailable", { models: [primaryId ?? "?", backupId].join(","), failureKind }),
+          () => console.error(`Modelo reserva (${backupId}) também falhou:`, lastBackupError ?? error),
+        );
+        throw new ModelUnavailableError([primaryId ?? "?", backupId], failureKind);
       }
-      console.error(`Modelo principal (${primaryId}) indisponível; sem reserva configurado:`, lastPrimaryError ?? error);
-      throw new ModelUnavailableError([primaryId ?? "?"], failureKindSchema.parse(classifyModelError(lastPrimaryError ?? error)));
+      const failureKind = failureKindSchema.parse(classifyModelError(lastPrimaryError ?? error));
+      logInRequest(
+        (log) => log.error("model.unavailable", { models: primaryId ?? "?", failureKind }),
+        () => console.error(`Modelo principal (${primaryId}) indisponível; sem reserva configurado:`, lastPrimaryError ?? error),
+      );
+      throw new ModelUnavailableError([primaryId ?? "?"], failureKind);
     }
   });
 }
