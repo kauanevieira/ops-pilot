@@ -139,3 +139,25 @@ describe("sync between the DDL CHECK lists and the zod enums (DB2)", () => {
     });
   }
 });
+
+describe("listSince (015)", () => {
+  it("returns the records in [from, to], inclusive, oldest first", () => {
+    const store = newStore();
+    const at = (iso: string, id: string) => record({ requestId: id, receivedAt: new Date(iso) });
+    store.record(at("2026-10-07T10:00:00.000Z", "b"), []);
+    store.record(at("2026-10-07T09:00:00.000Z", "a"), []);
+    store.record(at("2026-10-07T08:59:59.999Z", "before"), []);
+    store.record(at("2026-10-07T11:00:00.001Z", "after"), []);
+    store.record(at("2026-10-07T11:00:00.000Z", "c"), []);
+    const got = store.listSince(new Date("2026-10-07T09:00:00.000Z"), new Date("2026-10-07T11:00:00.000Z"));
+    assert.deepEqual(got.map((r) => r.requestId), ["a", "b", "c"]);
+    assert.deepEqual(got[0], at("2026-10-07T09:00:00.000Z", "a"));
+  });
+
+  it("uses the received_at index", () => {
+    const db = new DatabaseSync(":memory:");
+    new SqliteRequestStore(db);
+    const plan = db.prepare("EXPLAIN QUERY PLAN SELECT * FROM requests WHERE received_at BETWEEN ? AND ?").all("a", "b");
+    assert.ok(plan.some((row) => String(row.detail).includes("idx_requests_received_at")), JSON.stringify(plan));
+  });
+});

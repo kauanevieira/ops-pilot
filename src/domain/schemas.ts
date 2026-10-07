@@ -299,3 +299,13 @@ export const requestRecordSchema = z
     message: "errorCode deve ser nulo se e somente se status for 200.",
   });
 export type RequestRecord = z.infer<typeof requestRecordSchema>;
+
+// --- 015-request-stats ---------------------------------------------------
+
+/**
+ * `OPENROUTER_PRICES`: model id → USD per 1 million INPUT tokens. Only
+ * input, because input tokens are all a request record keeps (010, 014).
+ * A `:free` model never needs an entry — its cost is always 0.
+ */
+export const modelPricesSchema = z.record(modelIdSchema, z.number().nonnegative());
+export type ModelPrices = z.infer<typeof modelPricesSchema>;

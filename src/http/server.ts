@@ -22,6 +22,8 @@ import { createChatHandler } from "./chat.ts";
 import { toErrorBody, withRequestId } from "./errors.ts";
 import { createRequestTracking, getObs } from "./request-tracking.ts";
 import { createGetRequestHandler } from "./requests.ts";
+import { createStatsHandler } from "./stats.ts";
+import type { ModelPrices } from "../domain/schemas.ts";
 import { errorName, runWithRequestContext, silentLogger, type Logger } from "../obs/logger.ts";
 import { SqliteRequestStore, type RequestStore } from "../obs/request-store.ts";
 import { randomUUID } from "node:crypto";
@@ -96,6 +98,12 @@ export interface ChatAppDeps {
   generateRequestId?: () => string;
   /** 014-request-tracing: clock for `receivedAt`/`durationMs`; tests inject a controlled one. */
   now?: () => Date;
+  /**
+   * 015-request-stats: USD per 1M input tokens, by model id, for the cost
+   * in `GET /stats`. Default `{}` — only `:free` models then have a known
+   * cost. `src/index.ts` reads it from `OPENROUTER_PRICES`; tests inject it.
+   */
+  modelPrices?: ModelPrices;
 }
 
 /**
@@ -121,6 +129,7 @@ export function createApp(deps: ChatAppDeps = {}): Express {
   const logger = deps.logger ?? silentLogger;
   const generateRequestId = deps.generateRequestId ?? randomUUID;
   const now = deps.now ?? (() => new Date());
+  const modelPrices = deps.modelPrices ?? {};
 
   const learn = createLearningReflector({ memoryStore, distiller, timeoutMs: learningTimeoutMs });
 
@@ -150,6 +159,7 @@ export function createApp(deps: ChatAppDeps = {}): Express {
   );
 
   app.get("/requests/:id", createGetRequestHandler(requestStore));
+  app.get("/stats", createStatsHandler({ requestStore, now, prices: modelPrices }));
 
   // Registered after the routes, as Express requires for a 4-arg error
   // handler to be recognized as one.

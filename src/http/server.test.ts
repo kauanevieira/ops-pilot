@@ -2253,7 +2253,7 @@ describe("014: GET /requests/:id (US2)", () => {
 
   it("RT4: a failing store changes nothing the client sees, and the turn is still recorded", async () => {
     const conversationStore = new InMemoryConversationStore();
-    const throwingStore: RequestStore = { record() { throw new Error("disk full"); }, get() { return undefined; } };
+    const throwingStore: RequestStore = { record() { throw new Error("disk full"); }, get() { return undefined; }, listSince() { return []; } };
     const cap = captureLogger();
     await withServer({ resolveStrategy: okStrategy(), conversationStore, requestStore: throwingStore, logger: cap.logger, generateRequestId: sequentialIds() }, async (baseUrl) => {
       const res = await postChat(baseUrl, { message: "oi" });
@@ -2269,7 +2269,7 @@ describe("014: GET /requests/:id (US2)", () => {
   });
 
   it("a failing store still lets the learning reflector fire (FR-012)", async () => {
-    const throwingStore: RequestStore = { record() { throw new Error("x"); }, get() { return undefined; } };
+    const throwingStore: RequestStore = { record() { throw new Error("x"); }, get() { return undefined; }, listSince() { return []; } };
     const probe = learningProbe();
     const memoryStore = fakeMemoryStore({ "sou do checkout": queryVector(), "fato": queryVector() });
     await withServer(
@@ -2416,5 +2416,98 @@ describe("014: logs (US3)", () => {
     } finally {
       write.mock.restore();
     }
+  });
+});
+
+// --- 015-request-stats ---------------------------------------------------------
+
+describe("015: GET /stats", () => {
+  const T0 = new Date("2026-10-07T12:00:00.000Z");
+
+  /** A clock the test moves by hand: requests are stamped at it, `/stats` reads it. */
+  function movableClock(start: Date) {
+    let current = start.getTime();
+    return { now: () => new Date(current), advance: (ms: number) => void (current += ms) };
+  }
+
+  it("aggregates real /chat traffic: totals, errors by code, tokens, :free cost, percentiles, by route and model", async () => {
+    const clock = movableClock(T0);
+    const strategy = fakeStrategy("react", async () =>
+      fixedResult({ metrics: { llmCalls: 2, latencyMs: 5, promptTokens: 1000, modelUsed: "m/x:free" } }));
+    await withServer(
+      { resolveStrategy: recordingResolveStrategy(strategy).resolveStrategy, now: clock.now, requestStore: newRequestStore() },
+      async (baseUrl) => {
+        await postChat(baseUrl, { message: "oi" });
+        await postChat(baseUrl, { message: "oi" });
+        await postChat(baseUrl, { message: "" });
+        await delay(20);
+        const res = await fetch(`${baseUrl}/stats?since=1h`);
+        assert.equal(res.status, 200);
+        assert.equal(res.headers.get("x-request-id"), null);
+        const s = await jsonOf(res);
+        assert.equal(s.since, "1h");
+        assert.equal(s.to, T0.toISOString());
+        assert.equal(s.total, 3);
+        assert.equal(s.errors, 1);
+        assert.deepEqual(s.errorsByCode, { invalid_body: 1 });
+        assert.equal(s.promptTokens, 2000);
+        assert.equal(s.costUsd, 0);
+        assert.equal(s.unpricedRequests, 0);
+        assert.deepEqual(s.latencyMs, { p50: 0, p95: 0 }); // the clock never moved during the requests
+        assert.deepEqual(s.byRoute.map((g: any) => [g.route, g.requests]), [["react", 2]]);
+        assert.deepEqual(s.byModel.map((g: any) => [g.model, g.requests, g.costUsd]), [["m/x:free", 2, 0]]);
+      },
+    );
+  });
+
+  it("defaults to 24h and excludes older records", async () => {
+    const clock = movableClock(T0);
+    await withServer({ resolveStrategy: okStrategy(), now: clock.now }, async (baseUrl) => {
+      await postChat(baseUrl, { message: "antigo" });
+      clock.advance(25 * 3_600_000);
+      await postChat(baseUrl, { message: "novo" });
+      const s = await jsonOf(await fetch(`${baseUrl}/stats`));
+      assert.equal(s.since, "24h");
+      assert.equal(s.total, 1);
+      const all = await jsonOf(await fetch(`${baseUrl}/stats?since=2d`));
+      assert.equal(all.total, 2);
+    });
+  });
+
+  it("a paid model is priced from modelPrices; without a price it is unpriced, not free", async () => {
+    const strategy = fakeStrategy("react", async () =>
+      fixedResult({ metrics: { llmCalls: 1, latencyMs: 1, promptTokens: 2_000_000, modelUsed: "openai/gpt-4o-mini" } }));
+    const resolveStrategy = recordingResolveStrategy(strategy).resolveStrategy;
+    await withServer({ resolveStrategy, modelPrices: { "openai/gpt-4o-mini": 0.15 } }, async (baseUrl) => {
+      await postChat(baseUrl, { message: "oi" });
+      const s = await jsonOf(await fetch(`${baseUrl}/stats`));
+      assert.equal(s.costUsd, 0.3);
+      assert.equal(s.unpricedRequests, 0);
+    });
+    await withServer({ resolveStrategy }, async (baseUrl) => {
+      await postChat(baseUrl, { message: "oi" });
+      const s = await jsonOf(await fetch(`${baseUrl}/stats`));
+      assert.equal(s.costUsd, 0);
+      assert.equal(s.unpricedRequests, 1);
+    });
+  });
+
+  it("an empty window has zeros and null percentiles", async () => {
+    await withServer({}, async (baseUrl) => {
+      const s = await jsonOf(await fetch(`${baseUrl}/stats?since=30m`));
+      assert.equal(s.total, 0);
+      assert.deepEqual(s.latencyMs, { p50: null, p95: null });
+      assert.deepEqual(s.byRoute, []);
+    });
+  });
+
+  it("an invalid since is 400 invalid_query", async () => {
+    await withServer({}, async (baseUrl) => {
+      for (const q of ["since=abc", "since=0h", "since=91d", "since=24", "since=1h&since=2h"]) {
+        const res = await fetch(`${baseUrl}/stats?${q}`);
+        assert.equal(res.status, 400, q);
+        assert.equal((await jsonOf(res)).error.code, "invalid_query", q);
+      }
+    });
   });
 });

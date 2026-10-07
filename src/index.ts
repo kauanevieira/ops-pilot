@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ModelPrices } from "./domain/schemas.ts";
 import { createApp } from "./http/server.ts";
 import { openDatabase } from "./store/db.ts";
 import { seedDatabase } from "./store/sqlite-schema.ts";
@@ -12,6 +13,7 @@ import { createModelRouter } from "./agents/router.ts";
 import { baselineState } from "./store/seed.ts";
 import { createLogger } from "./obs/logger.ts";
 import { SqliteRequestStore } from "./obs/request-store.ts";
+import { readModelPrices } from "./obs/pricing.ts";
 
 /**
  * `PORT` is external input like any other (a CLI flag, an HTTP body) and
@@ -30,8 +32,19 @@ function resolvePort(): number {
   }
 }
 
+/** 015-request-stats: same rule as `PORT` — an invalid table refuses to start, loudly. */
+function resolveModelPrices(): ModelPrices {
+  try {
+    return readModelPrices(process.env.OPENROUTER_PRICES);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
+}
+
 function main(): void {
   const port = resolvePort();
+  const modelPrices = resolveModelPrices();
 
   // Durable storage (FR-010): the API's composition root is the only
   // caller that opens OPSPILOT_DB — the arena and the bench stay on the
@@ -77,7 +90,7 @@ function main(): void {
   // `createApp` defaults to a silent logger so tests stay quiet (LG6).
   const logger = createLogger();
 
-  const app = createApp({ store, conversationStore, memoryStore, distiller, summarizer, router, requestStore, logger });
+  const app = createApp({ store, conversationStore, memoryStore, distiller, summarizer, router, requestStore, logger, modelPrices });
 
   app.listen(port, () => {
     logger.info("server.listening", { port });

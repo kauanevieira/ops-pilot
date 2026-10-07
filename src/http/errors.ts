@@ -9,6 +9,14 @@ import type { ChatErrorCode } from "../domain/schemas.ts";
  */
 export type { ChatErrorCode };
 
+/**
+ * Every error `code` the HTTP API can answer with. `ChatErrorCode` is the
+ * closed set a `/chat` request can END with — it doubles as the
+ * `requests.error_code` CHECK, so codes of endpoints that never record a
+ * request (015's `invalid_query`, for `GET /stats`) live only here.
+ */
+export type ApiErrorCode = ChatErrorCode | "invalid_query";
+
 export interface ValidationIssue {
   path: string;
   message: string;
@@ -18,7 +26,7 @@ export interface ValidationIssue {
 /** The single body shape for every error response (FR-016). */
 export interface ChatErrorResponse {
   error: {
-    code: ChatErrorCode;
+    code: ApiErrorCode;
     message: string;
     details?: unknown;
   };
@@ -30,7 +38,7 @@ export interface ChatErrorResponse {
  * given, so `timeout` and `internal` responses never carry the key at all
  * (FR-017: nothing internal leaks, not even an empty placeholder).
  */
-export function toErrorBody(code: ChatErrorCode, message: string, details?: unknown): ChatErrorResponse {
+export function toErrorBody(code: ApiErrorCode, message: string, details?: unknown): ChatErrorResponse {
   return details === undefined ? { error: { code, message } } : { error: { code, message, details } };
 }
 
