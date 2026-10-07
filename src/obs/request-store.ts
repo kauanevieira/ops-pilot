@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS trace_events (
   payload    TEXT NOT NULL CHECK (json_valid(payload)),
   PRIMARY KEY (request_id, position)
 );
+
+CREATE INDEX IF NOT EXISTS idx_requests_received_at ON requests(received_at);
 `;
 
 export interface RequestStore {
@@ -55,6 +57,12 @@ export interface RequestStore {
   record(record: RequestRecord, trace: readonly TraceEvent[]): void;
   /** `undefined` when the id was never recorded. Rows are validated on read. */
   get(requestId: string): { request: RequestRecord; trace: TraceEvent[] } | undefined;
+  /**
+   * 015-request-stats: every record whose `receivedAt` is in `[from, to]`,
+   * oldest first. ISO-8601 UTC text compares in time order, so the range is
+   * a plain `BETWEEN` on the indexed column.
+   */
+  listSince(from: Date, to: Date): RequestRecord[];
 }
 
 const requestRowSchema = z
@@ -119,6 +127,7 @@ export class SqliteRequestStore implements RequestStore {
   private readonly insertEvent: StatementSync;
   private readonly selectRequest: StatementSync;
   private readonly selectEvents: StatementSync;
+  private readonly selectRange: StatementSync;
 
   constructor(db: DatabaseSync) {
     this.db = db;
@@ -135,6 +144,9 @@ export class SqliteRequestStore implements RequestStore {
     this.selectRequest = db.prepare("SELECT * FROM requests WHERE id = ?");
     this.selectEvents = db.prepare(
       "SELECT type, node_name, payload FROM trace_events WHERE request_id = ? ORDER BY position",
+    );
+    this.selectRange = db.prepare(
+      "SELECT * FROM requests WHERE received_at BETWEEN ? AND ? ORDER BY received_at, id",
     );
   }
 
@@ -177,5 +189,9 @@ export class SqliteRequestStore implements RequestStore {
     const request = requestRowSchema.parse(row);
     const trace = this.selectEvents.all(requestId).map((r) => eventRowSchema.parse(r));
     return { request, trace };
+  }
+
+  listSince(from: Date, to: Date): RequestRecord[] {
+    return this.selectRange.all(from.toISOString(), to.toISOString()).map((row) => requestRowSchema.parse(row));
   }
 }
