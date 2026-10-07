@@ -242,6 +242,26 @@ essas linhas.
 npm run dev | jq -c 'select(.requestId) | {event, requestId, status}'
 ```
 
+### Estatísticas
+
+`GET /stats?since=24h` agrega os pedidos registrados na janela (`since` em
+`m`, `h` ou `d`, até `90d`; padrão `24h`): total, erros (status ≠ 200) por
+código, tokens de entrada, custo estimado, p50/p95 da duração dos pedidos
+200 e os mesmos números por rota (`byRoute`) e por modelo (`byModel`).
+
+O custo é **só de entrada**, porque é o que o registro guarda
+(`promptTokens`): modelos `:free` custam 0, e os demais usam o preço por 1M
+tokens de entrada de `OPENROUTER_PRICES`
+(`{"openai/gpt-4o-mini": 0.15}`). Um modelo pago sem preço, ou um pedido sem
+tokens informados, entra em `unpricedRequests`, nunca como custo zero. As
+chamadas do roteador, do sumarizador e do refletor não entram, como em
+`promptTokens`. Contrato em
+[specs/015-request-stats/contracts/stats-endpoint.md](specs/015-request-stats/contracts/stats-endpoint.md).
+
+```bash
+curl -s 'http://localhost:3000/stats?since=7d' | jq '{total, errors, costUsd, latencyMs, byRoute: [.byRoute[] | {route, requests, latencyMs}]}'
+```
+
 `conversationId` continua uma conversa: as até 8 mensagens mais recentes
 daquela conversa (mensagem de quem pediu + resposta final, alternadas) são
 entregues ao agente na íntegra, antes da mensagem nova. Omitido, uma conversa
@@ -493,7 +513,9 @@ src/
 │              # GET /requests/:id (requests.ts)
 ├── obs/       # observabilidade: logger.ts (uma linha JSON por evento, só
 │              # metadados, contexto por pedido), request-store.ts (tabelas
-│              # requests e trace_events) e request-record.ts (monta o registro)
+│              # requests e trace_events), request-record.ts (monta o registro),
+│              # stats.ts (agregação pura do GET /stats) e pricing.ts
+│              # (OPENROUTER_PRICES)
 ├── scripts/   # comando de seed (grava no banco SQLite)
 ├── bench/     # cenários e verificação de acerto do benchmark (puro)
 ├── arena.ts   # CLI de comparação de estratégias (estado em memória)
@@ -524,7 +546,8 @@ de histórico), [specs/012-unified-graph/](specs/012-unified-graph/) (grafo
 unificado com roteador) [specs/013-model-resilience/](specs/013-model-resilience/)
 (resiliência de modelo: nova tentativa, reserva e 503) e
 [specs/014-request-tracing/](specs/014-request-tracing/) (rastro persistido,
-`requestId` e logs JSON).
+`requestId` e logs JSON) e [specs/015-request-stats/](specs/015-request-stats/)
+(estatísticas: `GET /stats`).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 
