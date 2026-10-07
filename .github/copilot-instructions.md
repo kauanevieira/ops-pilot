@@ -41,7 +41,8 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
   mudam. Evento de log novo: acrescentar ao catálogo `LogEvent` e a `contracts/log-format.md`.
   Tipo de evento de rastro novo: atualizar `traceEventTypeSchema` e o `CHECK` de `trace_events`.
 
-- `web/` é a war room (Vite + React + TypeScript, base `/opspilot/`), um pacote próprio com
+- `web/` é a war room (Vite + React + TypeScript, base `/opspilot/` por padrão; `OPSPILOT_WEB_BASE`
+  no build muda o caminho, via `web/build/base.ts`), um pacote próprio com
   `package.json` e testes em Vitest (`npm --prefix web test`, `npm --prefix web run typecheck`),
   fora de `npm test`/`npm run typecheck` da raiz. Os formatos que a API devolve e a war room
   lê (rastro, métricas, corpo do `/chat`, erro, ação pendente) são esquemas zod em
@@ -51,6 +52,8 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
   `traceEventTypeSchema`, o `CHECK` de `trace_events` **e** o componente do tipo em
   `web/src/trace/events/` (o `switch` é exaustivo). CORS: `src/http/cors.ts`, origens em
   `OPSPILOT_CORS_ORIGINS` (padrão `http://localhost:5173`).
+  Publicação: `.github/workflows/pages.yml` roda os portões da war room e publica `web/dist/` no
+  GitHub Pages (`/ops-pilot/`) a cada push em `main` que toque `web/` ou `src/domain/`.
 
 ## Comandos
 

@@ -98,6 +98,7 @@ npm test
 npm --prefix web install
 npm --prefix web run dev
 npm --prefix web run build
+OPSPILOT_WEB_BASE=/ops-pilot npm --prefix web run build   # como o GitHub Pages publica (caminho /ops-pilot/)
 npm --prefix web run typecheck
 npm --prefix web test
 ```
@@ -423,9 +424,11 @@ npm --prefix web run dev         # a war room, em http://localhost:5173/opspilot
 - **Engrenagem**: troca a URL da API e a mantém ao recarregar a página (só isso fica no
   navegador). O padrão é `VITE_OPSPILOT_API_URL` no momento do build, ou
   `http://localhost:3000`.
-- **Caminho base `/opspilot/`**: `npm --prefix web run build` gera `web/dist/` pronto para
-  ser servido sob esse caminho (com `404.html` igual ao `index.html`, para hospedagens
-  estáticas). A preview do build roda em `http://localhost:4173/opspilot/`.
+- **Caminho base**: `/opspilot/` por padrão (dev, preview e build). `npm --prefix web run build`
+  gera `web/dist/` pronto para ser servido sob esse caminho (com `404.html` igual ao
+  `index.html`, para hospedagens estáticas). A preview do build roda em
+  `http://localhost:4173/opspilot/`. `OPSPILOT_WEB_BASE` muda o caminho no build (o GitHub Pages
+  usa `/ops-pilot/`); um valor inválido (com `://`, espaço, `..`, `?` ou `#`) faz o build falhar.
 - **CORS**: a API só libera as origens de `OPSPILOT_CORS_ORIGINS` (lista separada por
   vírgula; padrão `http://localhost:5173`). A preview em `4173` precisa entrar na lista. Uma
   lista inválida impede o servidor de subir. Chamadas sem `Origin` (`curl`, testes, MCP) não
@@ -439,6 +442,32 @@ npm --prefix web run dev         # a war room, em http://localhost:5173/opspilot
 
 Os formatos que a API devolve e a war room lê (rastro, métricas, corpo do `/chat`, erro,
 ação pendente) estão definidos uma única vez, como esquemas zod, em `src/domain/wire.ts`.
+
+#### Publicação no GitHub Pages
+
+A war room publicada fica em **https://kauanevieira.github.io/ops-pilot/** (o desenvolvimento
+local continua em `http://localhost:5173/opspilot/`). O workflow
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) publica sozinho a cada push em
+`main` que altere `web/`, `src/domain/`, `package.json`, `package-lock.json`, `.nvmrc` ou o
+próprio workflow, e também por **Actions → Deploy war room to Pages → Run workflow**. Antes de
+publicar ele roda `typecheck` e os testes da war room e gera o build; se qualquer um falhar,
+nada é publicado e a versão anterior continua no ar.
+
+- **Primeira vez** (uma só): em **Settings → Pages → Build and deployment → Source**, escolha
+  **GitHub Actions**, e depois dispare o workflow manualmente (ou faça um push que o acione).
+  Sem isso, o passo `configure-pages` falha.
+- **URL padrão da API**: opcional. Crie a variável de repositório (não segredo) `OPSPILOT_API_URL`
+  em **Settings → Secrets and variables → Actions → Variables**; ela é embutida no build como
+  `VITE_OPSPILOT_API_URL`. Sem ela, o padrão é `http://localhost:3000`. Cada pessoa ainda pode
+  trocá-la pela engrenagem.
+- **CORS**: para a war room publicada falar com a sua API, acrescente a origem do Pages, **sem
+  caminho**, à lista da API, por exemplo
+  `OPSPILOT_CORS_ORIGINS=http://localhost:5173,https://kauanevieira.github.io`.
+- **HTTPS**: a página publicada é HTTPS. Os navegadores deixam chamar `http://localhost`, mas
+  bloqueiam uma API em HTTP em outro host; nesse caso a API precisa estar em HTTPS, e a war room
+  mostra "API não pôde ser alcançada".
+
+Contrato: [specs/017-war-room-pages/contracts/pages-workflow.md](specs/017-war-room-pages/contracts/pages-workflow.md).
 
 ### Memória semântica: custo em disco
 
@@ -568,7 +597,8 @@ src/
 ├── bench.ts   # CLI de benchmark: 3 cenários x 2 estratégias, acerto por estado
 └── index.ts   # bootstrap: abre/semeia o banco SQLite, valida PORT e sobe a API HTTP
 
-web/           # war room (Vite + React + TS, base /opspilot/), pacote próprio
+web/           # war room (Vite + React + TS, base /opspilot/ por padrão), pacote próprio
+├── build/         # resolveBase: caminho base do build (OPSPILOT_WEB_BASE, 017)
 ├── src/api/       # cliente HTTP injetável e classificação das respostas
 ├── src/state/     # reducer puro da conversa
 ├── src/chat/      # lista de mensagens, compositor, erros, cartão de aprovação
@@ -602,7 +632,8 @@ unificado com roteador) [specs/013-model-resilience/](specs/013-model-resilience
 [specs/014-request-tracing/](specs/014-request-tracing/) (rastro persistido,
 `requestId` e logs JSON) e [specs/015-request-stats/](specs/015-request-stats/)
 (estatísticas: `GET /stats`) e [specs/016-war-room-web/](specs/016-war-room-web/)
-(war room web, CORS e o contrato de aprovação).
+(war room web, CORS e o contrato de aprovação) e
+[specs/017-war-room-pages/](specs/017-war-room-pages/) (publicação da war room no GitHub Pages).
 
 ## Nota sobre modelos gratuitos do OpenRouter
 
