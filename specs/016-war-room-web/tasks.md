@@ -182,19 +182,19 @@ vale pelo navegador.
 
 ### Tests for User Story 1
 
-- [ ] T017 [P] [US1] Escrever `web/src/state/conversation.test.ts` (reducer puro, data-model.md):
+- [x] T017 [P] [US1] Escrever `web/src/state/conversation.test.ts` (reducer puro, data-model.md):
   - `send` acrescenta o item `user` e liga `inFlight`. `send` com `!canSend` é ignorado.
   - `answered` acrescenta `answer`, guarda `conversationId` e desliga `inFlight`.
   - `failed` acrescenta `error` com `retryText`.
   - `reset` volta ao estado inicial.
   - o reducer não muta o estado recebido (comparar com `structuredClone` feito antes).
-- [ ] T018 [P] [US1] Escrever `web/src/App.test.tsx`, com `fetch` dublê e ids/relógio fixos:
+- [x] T018 [P] [US1] Escrever `web/src/App.test.tsx`, com `fetch` dublê e ids/relógio fixos:
   - enviar mostra a mensagem na hora e o indicador "pensando…" até a resposta.
   - a segunda mensagem é enviada com `conversationId`.
   - "Nova conversa" limpa a tela e a próxima chamada vai sem `conversationId`.
   - o compositor fica desabilitado durante o pedido (FR-003).
   - Enter envia e Shift+Enter quebra linha.
-- [ ] T019 [P] [US1] Escrever `web/src/chat/ErrorBubble.test.tsx`, com um caso por linha da tabela
+- [x] T019 [P] [US1] Escrever `web/src/chat/ErrorBubble.test.tsx`, com um caso por linha da tabela
   "Mensagens de erro" de `contracts/web-ui.md`:
   - o texto de cada código.
   - o `requestId` aparece com botão copiar.
@@ -204,28 +204,28 @@ vale pelo navegador.
 
 ### Implementation for User Story 1
 
-- [ ] T020 [US1] Implementar `web/src/state/conversation.ts` (depende de T017): tipos
+- [x] T020 [US1] Implementar `web/src/state/conversation.ts` (depende de T017): tipos
   `ConversationState`/`ConversationItem`/`ApprovalState` como em data-model.md, um reducer
   puro com as ações `send`, `answered`, `failed` e `reset`, e o seletor `canSend` (já
   considerando cartões `pending`/`deciding`, para a US3 só acrescentar ações)
-- [ ] T021 [P] [US1] Implementar `web/src/chat/errors.ts` (pura): `toDisplayError(outcome, url)
+- [x] T021 [P] [US1] Implementar `web/src/chat/errors.ts` (pura): `toDisplayError(outcome, url)
   → DisplayError`, com os textos da tabela de `contracts/web-ui.md` (código desconhecido →
   "A API respondeu com erro `<code>`."), e `web/src/chat/ErrorBubble.tsx` (depende de T019)
-- [ ] T022 [P] [US1] Implementar `web/src/chat/MessageList.tsx`: renderiza `items` em ordem.
+- [x] T022 [P] [US1] Implementar `web/src/chat/MessageList.tsx`: renderiza `items` em ordem.
   `user` à direita. `answer` à esquerda com o texto (quebras preservadas), a estratégia do
   evento `route` quando existir (via `parseTrace` provisório, ou `null`) e `latencyMs`. Deixar um
   slot `onShowTrace(itemId)` para a US2. `error` via `ErrorBubble`.
-- [ ] T023 [P] [US1] Implementar `web/src/chat/Composer.tsx`: textarea com rótulo acessível,
+- [x] T023 [P] [US1] Implementar `web/src/chat/Composer.tsx`: textarea com rótulo acessível,
   Enter envia, Shift+Enter quebra linha, botão Enviar, ambos desabilitados com `disabled`, e
   indicador "pensando… Ns" quando `inFlight` (contador por `setInterval`, limpo no unmount)
-- [ ] T024 [US1] Implementar `web/src/App.tsx` (depende de T015, T016, T020–T023):
+- [x] T024 [US1] Implementar `web/src/App.tsx` (depende de T015, T016, T020–T023):
   - `useReducer(conversationReducer)`. Ids por `crypto.randomUUID()` e `at` por
     `new Date().toISOString()`, só aqui (Princípio I).
   - `createApiClient` com `loadApiUrl(window.localStorage)` (tolerando exceção) e o `fetch`
     global. Aceitar `fetch`, `storage`, `newId` e `now` por props, para os testes.
   - cabeçalho com "OpsPilot · War Room", URL em uso e "Nova conversa".
   - "Tentar de novo" reenvia `retryText`. "Nova conversa" de erro chama `reset`.
-- [ ] T025 [US1] Rodar `npm --prefix web test` e `npm --prefix web run typecheck`: verdes
+- [x] T025 [US1] Rodar `npm --prefix web test` e `npm --prefix web run typecheck`: verdes
 
 **Checkpoint**: a conversa funciona contra o `fetch` dublê.
 

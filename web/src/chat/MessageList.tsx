@@ -1,0 +1,78 @@
+import { useEffect, useRef } from "react";
+import { traceEventSchema } from "@domain/wire.ts";
+import type { ConversationItem } from "../state/conversation.ts";
+import { ErrorBubble } from "./ErrorBubble.tsx";
+
+interface Props {
+  items: ConversationItem[];
+  /** The one item that may show "Tentar de novo" (the last error, when idle). */
+  retryItemId: string | null;
+  onRetry: (text: string) => void;
+  onNewConversation: () => void;
+  /** US2: opens the trace of an answer. */
+  onShowTrace?: (itemId: string) => void;
+}
+
+/** The strategy the router (or the override) chose, read from the route event. */
+function strategyOf(trace: unknown[]): string | null {
+  for (const raw of trace) {
+    const parsed = traceEventSchema.safeParse(raw);
+    if (parsed.success && parsed.data.type === "route") return parsed.data.strategy;
+  }
+  return null;
+}
+
+export function MessageList({ items, retryItemId, onRetry, onNewConversation, onShowTrace }: Props) {
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView?.({ block: "end" });
+  }, [items.length]);
+
+  return (
+    <div className="conversation" aria-live="polite">
+      <div className="conversation-inner">
+        {items.length === 0 && <p className="empty">Pergunte sobre alertas, incidentes e runbooks.</p>}
+        {items.map((item) => {
+          switch (item.kind) {
+            case "user":
+              return (
+                <div key={item.id} className="bubble bubble-user">
+                  {item.text}
+                </div>
+              );
+            case "answer": {
+              const strategy = strategyOf(item.result.trace);
+              return (
+                <div key={item.id} className="bubble bubble-answer">
+                  {item.result.answer}
+                  <div className="bubble-meta">
+                    {strategy && <span>{strategy}</span>}
+                    <span>{item.result.metrics.latencyMs} ms</span>
+                    {onShowTrace && (
+                      <button type="button" className="link-btn" onClick={() => onShowTrace(item.id)}>
+                        ver raciocínio
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+            case "error":
+              return (
+                <ErrorBubble
+                  key={item.id}
+                  error={item.error}
+                  canRetry={item.id === retryItemId && item.retryText !== undefined}
+                  onRetry={() => item.retryText !== undefined && onRetry(item.retryText)}
+                  onNewConversation={onNewConversation}
+                />
+              );
+            case "approval":
+              return null; // US3
+          }
+        })}
+        <div ref={endRef} />
+      </div>
+    </div>
+  );
+}
