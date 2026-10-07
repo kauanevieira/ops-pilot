@@ -132,7 +132,7 @@ da Phase 1 e pode correr em paralelo a esta.
 
 ### URL da API e cliente (research R-007 a R-009, data-model.md)
 
-- [ ] T013 [P] Escrever `web/src/api/url.test.ts` e depois implementar `web/src/api/url.ts`
+- [x] T013 [P] Escrever `web/src/api/url.test.ts` e depois implementar `web/src/api/url.ts`
   (puras):
   - `parseApiUrl(input): { ok: true; url } | { ok: false; reason }` aceita só `http:`/`https:`
     absolutas, remove a barra final e preserva o caminho (`https://host/api/` →
@@ -141,7 +141,7 @@ da Phase 1 e pode correr em paralelo a esta.
     `https://h/api` + `/chat` → `https://h/api/chat`).
   - `DEFAULT_API_URL` = `import.meta.env.VITE_OPSPILOT_API_URL` validada por `parseApiUrl`,
     ou `http://localhost:3000`.
-- [ ] T014 [P] Escrever `web/src/api/client.test.ts` cobrindo `classifyResponse(status, headers,
+- [x] T014 [P] Escrever `web/src/api/client.test.ts` cobrindo `classifyResponse(status, headers,
   json)` (pura):
   - 200 válido → `answered`.
   - 202 válido → `pending`.
@@ -149,7 +149,7 @@ da Phase 1 e pode correr em paralelo a esta.
     de `X-Request-Id`.
   - 200 sem `answer`, 202 sem `approval`, status 302 e corpo de erro sem `error.code` →
     `malformed`.
-- [ ] T015 Implementar `web/src/api/client.ts` (depende de T013, T014, T010):
+- [x] T015 Implementar `web/src/api/client.ts` (depende de T013, T014, T010):
   - `classifyResponse`.
   - `createApiClient({ baseUrl, fetch, timeoutMs = 190_000 })` com
     `sendChat({ message, conversationId? })` e `decide(approvalId, decision)`, ambos
@@ -160,7 +160,7 @@ da Phase 1 e pode correr em paralelo a esta.
     `unreachable{reason: "timeout"}`. JSON inválido vira `malformed`.
   - testes adicionais em `client.test.ts` com `fetch` dublê: URL e corpo enviados, rede caída,
     prazo (com `timeoutMs` curto) e JSON inválido.
-- [ ] T016 [P] Escrever `web/src/settings/api-url-store.test.ts` e depois implementar
+- [x] T016 [P] Escrever `web/src/settings/api-url-store.test.ts` e depois implementar
   `web/src/settings/api-url-store.ts`:
   - `loadApiUrl(storage) → ApiUrlSetting` lê `opspilot.apiUrl`. Valor inválido é ignorado e
     devolve `source: "default"`. Storage que lança exceção devolve `persistent: false`.
