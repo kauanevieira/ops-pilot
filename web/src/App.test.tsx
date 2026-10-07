@@ -32,15 +32,18 @@ function memoryStorage(): Storage {
   };
 }
 
-function setup(responder: (call: number, body: Record<string, unknown>) => Response | Promise<Response>) {
+function setup(
+  responder: (call: number, body: Record<string, unknown>) => Response | Promise<Response>,
+  options: { storage?: Storage | null } = {},
+) {
   let call = 0;
   let id = 0;
   const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
     call += 1;
     return responder(call, JSON.parse(init.body as string));
   });
-  const storage = memoryStorage();
-  render(
+  const storage = options.storage !== undefined ? options.storage : memoryStorage();
+  const { unmount } = render(
     <App
       fetch={fetchMock as unknown as typeof fetch}
       storage={storage}
@@ -48,7 +51,7 @@ function setup(responder: (call: number, body: Record<string, unknown>) => Respo
       now={() => new Date("2026-10-07T12:00:00.000Z")}
     />,
   );
-  return { fetchMock, storage };
+  return { fetchMock, storage, unmount };
 }
 
 const box = () => screen.getByRole("textbox", { name: /mensagem/i });
@@ -213,5 +216,104 @@ describe("App · ver raciocínio (US2)", () => {
     const buttons = screen.getAllByRole("button", { name: /ver raciocínio/i });
     await userEvent.click(buttons[0]!);
     expect(screen.getByRole("dialog")).toHaveTextContent("pensamento 1");
+  });
+});
+
+const gear = () => screen.getByRole("button", { name: /configurações/i });
+const urlField = () => screen.getByRole("textbox", { name: /url da api/i });
+
+async function changeUrl(url: string) {
+  await userEvent.click(gear());
+  await userEvent.clear(urlField());
+  await userEvent.type(urlField(), url);
+  await userEvent.click(screen.getByRole("button", { name: "Salvar" }));
+}
+
+async function sendOne(text = "oi") {
+  await userEvent.type(box(), text);
+  await userEvent.click(sendButton());
+}
+
+describe("App · API URL gear (US4)", () => {
+  it("opens with the default URL in use", async () => {
+    setup(() => json(200, answer("c1", "ok")));
+    await userEvent.click(gear());
+    expect(urlField()).toHaveValue("http://localhost:3000");
+  });
+
+  it("saving sends the next request to the new URL", async () => {
+    const { fetchMock } = setup(() => json(200, answer("c1", "ok")));
+    await changeUrl("http://localhost:3999");
+    expect(screen.queryByRole("dialog", { name: "Configurações" })).not.toBeInTheDocument();
+    await sendOne();
+    await screen.findByText("ok");
+    expect(fetchMock.mock.calls[0]![0]).toBe("http://localhost:3999/chat");
+  });
+
+  it("the choice survives remounting the app (a reload)", async () => {
+    const first = setup(() => json(200, answer("c1", "ok")));
+    await changeUrl("https://host/api");
+    first.unmount();
+
+    const second = setup(() => json(200, answer("c1", "ok")), { storage: first.storage });
+    await sendOne();
+    await screen.findByText("ok");
+    expect(second.fetchMock.mock.calls[0]![0]).toBe("https://host/api/chat");
+  });
+
+  it("an invalid URL keeps the previous one", async () => {
+    const { fetchMock } = setup(() => json(200, answer("c1", "ok")));
+    await userEvent.click(gear());
+    await userEvent.clear(urlField());
+    await userEvent.type(urlField(), "isso nao e url");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    await sendOne();
+    await screen.findByText("ok");
+    expect(fetchMock.mock.calls[0]![0]).toBe("http://localhost:3000/chat");
+  });
+
+  it("Restore default goes back to the default URL", async () => {
+    const { fetchMock } = setup(() => json(200, answer("c1", "ok")));
+    await changeUrl("http://localhost:3999");
+    await userEvent.click(gear());
+    await userEvent.click(screen.getByRole("button", { name: /restaurar padrão/i }));
+    await sendOne();
+    await screen.findByText("ok");
+    expect(fetchMock.mock.calls[0]![0]).toBe("http://localhost:3000/chat");
+  });
+
+  it("the header shows the URL in use", async () => {
+    setup(() => json(200, answer("c1", "ok")));
+    expect(screen.getByText(/http:\/\/localhost:3000 \(padrão\)/)).toBeInTheDocument();
+    await changeUrl("http://localhost:3999");
+    expect(screen.getByText("http://localhost:3999")).toBeInTheDocument();
+  });
+
+  it("with unavailable storage the app works with the default and says the choice is not remembered", async () => {
+    const blocked = new Proxy({} as Storage, {
+      get() {
+        return () => {
+          throw new DOMException("blocked", "SecurityError");
+        };
+      },
+    });
+    const { fetchMock } = setup(() => json(200, answer("c1", "ok")), { storage: blocked });
+    await sendOne();
+    await screen.findByText("ok");
+    expect(fetchMock.mock.calls[0]![0]).toBe("http://localhost:3000/chat");
+
+    await userEvent.click(gear());
+    expect(screen.getByText(/não será lembrada/i)).toBeInTheDocument();
+  });
+
+  it("an unreachable API at the saved URL names that URL (US4-5)", async () => {
+    setup(() => {
+      throw new TypeError("Failed to fetch");
+    });
+    await changeUrl("http://localhost:3999");
+    await sendOne();
+    expect(await screen.findByText(/Não foi possível falar com a API em http:\/\/localhost:3999/)).toBeInTheDocument();
   });
 });

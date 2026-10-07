@@ -353,7 +353,7 @@ dublê e enviar uma mensagem. O `fetch` dublê recebe `http://localhost:3999/cha
 
 ### Tests for User Story 4
 
-- [ ] T039 [P] [US4] Escrever `web/src/settings/SettingsDialog.test.tsx` e acrescentar a
+- [x] T039 [P] [US4] Escrever `web/src/settings/SettingsDialog.test.tsx` e acrescentar a
   `web/src/App.test.tsx`:
   - a engrenagem (rótulo "Configurações") abre o diálogo com a URL em uso.
   - uma URL inválida mostra erro inline e mantém a anterior.
@@ -365,10 +365,10 @@ dublê e enviar uma mensagem. O `fetch` dublê recebe `http://localhost:3999/cha
 
 ### Implementation for User Story 4
 
-- [ ] T040 [US4] Implementar `web/src/settings/SettingsDialog.tsx` (depende de T039): campo
+- [x] T040 [US4] Implementar `web/src/settings/SettingsDialog.tsx` (depende de T039): campo
   URL rotulado e os botões Salvar, Restaurar padrão e Cancelar. Valida com `parseApiUrl` e
   mostra o aviso quando `persistent === false`.
-- [ ] T041 [US4] Em `web/src/App.tsx`: a URL passa a ser estado (`ApiUrlSetting`), o cliente é
+- [x] T041 [US4] Em `web/src/App.tsx`: a URL passa a ser estado (`ApiUrlSetting`), o cliente é
   recriado quando ela muda, a engrenagem fica no cabeçalho e o cabeçalho mostra se a URL em uso
   é a padrão. Rodar T039.
 

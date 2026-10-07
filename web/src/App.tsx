@@ -3,7 +3,9 @@ import { createApiClient } from "./api/client.ts";
 import { Composer } from "./chat/Composer.tsx";
 import { toDisplayError } from "./chat/errors.ts";
 import { MessageList } from "./chat/MessageList.tsx";
-import { loadApiUrl } from "./settings/api-url-store.ts";
+import { DEFAULT_API_URL } from "./api/url.ts";
+import { loadApiUrl, resetApiUrl, saveApiUrl, type ApiUrlSetting } from "./settings/api-url-store.ts";
+import { SettingsDialog } from "./settings/SettingsDialog.tsx";
 import { TraceDrawer } from "./trace/TraceDrawer.tsx";
 import { canSend, conversationReducer, initialConversation } from "./state/conversation.ts";
 
@@ -28,7 +30,8 @@ export function App(props: Props) {
   const newId = props.newId ?? (() => crypto.randomUUID());
   const now = props.now ?? (() => new Date());
   const [storage] = useState(() => (props.storage !== undefined ? props.storage : browserStorage()));
-  const [apiUrl] = useState(() => loadApiUrl(storage));
+  const [apiUrl, setApiUrl] = useState<ApiUrlSetting>(() => loadApiUrl(storage));
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const [state, dispatch] = useReducer(conversationReducer, initialConversation);
   const [traceItemId, setTraceItemId] = useState<string | null>(null);
@@ -52,6 +55,16 @@ export function App(props: Props) {
     }
   }
 
+  function saveUrl(url: string) {
+    setApiUrl({ url, source: "saved", persistent: saveApiUrl(storage, url) });
+    setSettingsOpen(false);
+  }
+
+  function restoreDefaultUrl() {
+    setApiUrl({ url: DEFAULT_API_URL, source: "default", persistent: resetApiUrl(storage) });
+    setSettingsOpen(false);
+  }
+
   function reset() {
     setTraceItemId(null);
     dispatch({ type: "reset" });
@@ -73,6 +86,15 @@ export function App(props: Props) {
         <button type="button" className="btn" onClick={() => reset()}>
           Nova conversa
         </button>
+        <button
+          type="button"
+          className="btn btn-icon"
+          aria-label="Configurações"
+          title="Configurações"
+          onClick={() => setSettingsOpen(true)}
+        >
+          ⚙
+        </button>
       </header>
       <MessageList
         items={state.items}
@@ -82,6 +104,14 @@ export function App(props: Props) {
         onShowTrace={setTraceItemId}
       />
       {traced?.kind === "answer" && <TraceDrawer result={traced.result} onClose={() => setTraceItemId(null)} />}
+      {settingsOpen && (
+        <SettingsDialog
+          setting={apiUrl}
+          onSave={saveUrl}
+          onReset={restoreDefaultUrl}
+          onCancel={() => setSettingsOpen(false)}
+        />
+      )}
       <Composer disabled={!canSend(state)} inFlight={state.inFlight} onSend={(text) => void send(text)} />
     </div>
   );
