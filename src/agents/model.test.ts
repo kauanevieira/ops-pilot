@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { AIMessage } from "@langchain/core/messages";
 import { FakeListChatModel } from "@langchain/core/utils/testing";
@@ -17,6 +17,7 @@ import {
   type ModelSource,
   type SourcedModel,
 } from "./model.ts";
+import { createLogger, runWithRequestContext } from "../obs/logger.ts";
 
 // --- Test doubles (never in src/ outside *.test.ts) -----------------------
 
@@ -390,5 +391,56 @@ describe("resilient — cancellation during the retry wait (MF5)", () => {
     assert.ok(Date.now() - started < 1_000, "should abort quickly, not wait out all retries");
     assert.equal(primary.attempts, 1);
     assert.equal(backupCalled, false);
+  });
+});
+
+// --- 014-request-tracing: log lines inside a request, console outside (LG5) ---
+
+describe("resilient logging (014)", () => {
+  function capture() {
+    const lines: string[] = [];
+    const logger = createLogger({ sink: (l) => void lines.push(l), now: () => new Date(0) });
+    return { lines, logger, parsed: () => lines.map((l) => JSON.parse(l)) };
+  }
+
+  it("inside a request: model.failed + model.fallback are JSON lines with the requestId and no provider message", async () => {
+    const cap = capture();
+    const primary = new FailingModel(notFoundError());
+    await runWithRequestContext({ requestId: "r1", logger: cap.logger }, () =>
+      resilient((m) => m, fakeSource({ primary, backup: okModel("do reserva") })).invoke("oi"),
+    );
+    const lines = cap.parsed();
+    assert.deepEqual(lines.map((l) => l.event), ["model.failed", "model.fallback"]);
+    assert.deepEqual(lines[0], { ts: "1970-01-01T00:00:00.000Z", level: "warn", event: "model.failed", requestId: "r1", model: "primary-model", failureKind: "non_transient" });
+    assert.deepEqual(lines[1], { ts: "1970-01-01T00:00:00.000Z", level: "warn", event: "model.fallback", requestId: "r1", from: "primary-model", to: "backup-model", reason: "non_transient" });
+    assert.equal(cap.lines.some((l) => l.includes("modelo inexistente")), false);
+  });
+
+  it("inside a request: no model answering is model.unavailable with the ids tried", async () => {
+    const cap = capture();
+    await assert.rejects(
+      runWithRequestContext({ requestId: "r1", logger: cap.logger }, () =>
+        resilient((m) => m, fakeSource({ primary: new FailingModel(notFoundError()), backup: new FailingModel(notFoundError()) })).invoke("oi"),
+      ),
+      ModelUnavailableError,
+    );
+    const last = cap.parsed().at(-1);
+    assert.equal(last.event, "model.unavailable");
+    assert.equal(last.level, "error");
+    assert.equal(last.models, "primary-model,backup-model");
+    assert.equal(last.requestId, "r1");
+  });
+
+  it("outside a request: the same scenario never touches a logger and keeps today's console.error (LG5)", async () => {
+    const consoleError = mock.method(console, "error", () => {});
+    try {
+      await resilient((m) => m, fakeSource({ primary: new FailingModel(notFoundError()), backup: okModel("do reserva") })).invoke("oi");
+      const messages = consoleError.mock.calls.map((c) => String(c.arguments[0]));
+      assert.equal(messages.length, 2);
+      assert.match(messages[0]!, /^Modelo principal \(primary-model\) falhou \(non_transient\); sem nova tentativa:/);
+      assert.match(messages[1]!, /^Trocando para o modelo reserva \(backup-model\) após falha do principal \(primary-model\):/);
+    } finally {
+      consoleError.mock.restore();
+    }
   });
 });

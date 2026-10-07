@@ -31,6 +31,16 @@ um agente LangChain/LangGraph rodando sobre OpenRouter.
   (`runWithResilienceScope`). Rastro ganha o evento `fallback`; métricas ganham
   `modelUsed`. Sem nenhum modelo disponível, o `/chat` responde 503 `model_unavailable`.
 
+- Todo pedido do `POST /chat` ganha um `requestId` (middleware `src/http/request-tracking.ts`,
+  antes do `express.json()`), devolvido em `X-Request-Id` e no corpo. Registro e rastro vão para
+  as tabelas `requests`/`trace_events` (`src/obs/request-store.ts`) e `GET /requests/:id` os
+  devolve. O logger (`src/obs/logger.ts`) escreve uma linha JSON por evento, **só metadados**:
+  `LogFields` aceita apenas string/number/boolean/null e exceção vira `errorName`. Camadas
+  internas logam com `logInRequest(...)`, que usa o logger do pedido (`AsyncLocalStorage`,
+  aberto no handler) e cai no `console.error` de sempre fora do HTTP — arena, bench e MCP não
+  mudam. Evento de log novo: acrescentar ao catálogo `LogEvent` e a `contracts/log-format.md`.
+  Tipo de evento de rastro novo: atualizar `traceEventTypeSchema` e o `CHECK` de `trace_events`.
+
 ## Comandos
 
 - `npm run dev` — sobe a API HTTP (`src/index.ts`, `POST /chat`)

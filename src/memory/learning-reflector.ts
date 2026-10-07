@@ -3,6 +3,7 @@ import type { Distiller } from "./distiller.ts";
 import { looksLikeSecret } from "./secret-guard.ts";
 import type { MemoryStore } from "./memory-store.ts";
 import { withTimeout } from "../lib/with-timeout.ts";
+import { errorName, logInRequest } from "../obs/logger.ts";
 
 /** Independent of the request's own 180 s deadline (contracts/learning-reflector.md, R-005). */
 export const LEARNING_TIMEOUT_MS = 30_000;
@@ -98,17 +99,34 @@ export function createLearningReflector(deps: {
  * logging every ordinary request would be noise.
  */
 export function logLearningOutcome(outcome: LearningOutcome): void {
+  // 014-request-tracing (FR-022): inside a request the outcome becomes a
+  // metadata-only JSON line — the reflector runs after the response, but as
+  // a continuation created inside the request context it still carries the
+  // `requestId`. Outside one, the console lines below are unchanged.
   if (outcome.kind === "failed") {
-    console.error(
-      `Refletor de aprendizado falhou (userId: ${outcome.userId}, etapa: ${outcome.stage}):`,
-      outcome.error,
+    logInRequest(
+      (log) => log.warn("learning.failed", { userId: outcome.userId, stage: outcome.stage, errorName: errorName(outcome.error) }),
+      () =>
+        console.error(
+          `Refletor de aprendizado falhou (userId: ${outcome.userId}, etapa: ${outcome.stage}):`,
+          outcome.error,
+        ),
     );
     return;
   }
   if (outcome.kind === "learned") {
-    console.info(
-      `Refletor de aprendizado: fato ${outcome.result.created ? "guardado" : "já existia"} ` +
-        `(userId: ${outcome.userId}, memoryId: ${outcome.result.memoryId}).`,
+    logInRequest(
+      (log) =>
+        log.info("learning.learned", {
+          userId: outcome.userId,
+          memoryId: outcome.result.memoryId,
+          created: outcome.result.created,
+        }),
+      () =>
+        console.info(
+          `Refletor de aprendizado: fato ${outcome.result.created ? "guardado" : "já existia"} ` +
+            `(userId: ${outcome.userId}, memoryId: ${outcome.result.memoryId}).`,
+        ),
     );
   }
 }

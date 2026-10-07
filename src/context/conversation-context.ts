@@ -1,4 +1,5 @@
 import type { ConversationStore } from "../store/conversation-store.ts";
+import { errorName, logInRequest } from "../obs/logger.ts";
 import type { ConversationMessage } from "../domain/schemas.ts";
 import type { TraceEvent } from "../trace/types.ts";
 import { HISTORY_WINDOW } from "../agents/conversation-history.ts";
@@ -111,7 +112,10 @@ export async function prepareConversationContext(
     } catch (error) {
       // FR-011: any failure (rejection, timeout, empty result) leaves the
       // request to proceed without a new summary. Logged, never thrown.
-      console.error("Falha ao resumir histórico da conversa:", error);
+      logInRequest(
+        (log) => log.warn("summary.failed", { errorName: errorName(error) }),
+        () => console.error("Falha ao resumir histórico da conversa:", error),
+      );
     }
     // Re-read regardless of outcome (R-003): reflects whatever is actually
     // saved, whether this request's own write won, another concurrent

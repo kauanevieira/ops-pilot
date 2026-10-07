@@ -5,6 +5,10 @@
 Acréscimo ao esquema de [`004-sqlite-persistence/contracts/database-schema.md`](../../004-sqlite-persistence/contracts/database-schema.md).
 Nada de `SCHEMA_SQL` nem de `seedDatabase` muda.
 
+> **Emendado por `014-request-tracing`**: duas tabelas novas no mesmo arquivo, `requests` e
+> `trace_events`, criadas pelo construtor do `SqliteRequestStore`. Nada do esquema abaixo muda.
+> Ver [`specs/014-request-tracing/contracts/database-schema.md`](../../014-request-tracing/contracts/database-schema.md).
+
 ## DDL — `CONVERSATION_SCHEMA_SQL` em `src/store/sqlite-schema.ts`
 
 ```sql

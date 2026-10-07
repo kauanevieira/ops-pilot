@@ -48,6 +48,14 @@
 > modelo atende a estratégia — distinta do `500 internal` já existente. Corpo da
 > requisição não muda. Ver
 > [`specs/013-model-resilience/contracts/chat-endpoint.md`](../../013-model-resilience/contracts/chat-endpoint.md).
+>
+> **Emendado também por `014-request-tracing`**: toda resposta do `/chat`, de sucesso ou de
+> erro, ganha o cabeçalho `X-Request-Id` e o campo `requestId` no corpo (nos erros, como chave
+> irmã de `error`). Um `X-Request-Id` do cliente é ignorado. Nova consulta
+> `GET /requests/:id` e novo código `request_not_found`. Corpo da requisição e demais campos
+> não mudam. Ver
+> [`specs/014-request-tracing/contracts/chat-endpoint.md`](../../014-request-tracing/contracts/chat-endpoint.md)
+> e [`requests-endpoint.md`](../../014-request-tracing/contracts/requests-endpoint.md).
 
 O único endpoint da feature. Recebe um pedido em linguagem natural, executa uma estratégia
 de raciocínio e devolve o resultado da execução.

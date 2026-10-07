@@ -1,9 +1,10 @@
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { SqliteMemoryStore, type MemoryStore } from "./memory-store.ts";
 import { createTableEmbedder, queryVector } from "./table-embedder.ts";
-import { createLearningReflector, LEARNING_TIMEOUT_MS } from "./learning-reflector.ts";
+import { createLearningReflector, logLearningOutcome, LEARNING_TIMEOUT_MS } from "./learning-reflector.ts";
+import { createLogger, runWithRequestContext } from "../obs/logger.ts";
 import type { Distiller } from "./distiller.ts";
 import type { LearningDecision } from "../domain/schemas.ts";
 
@@ -236,5 +237,48 @@ describe("createLearningReflector — o distiller recebe exatamente a mensagem (
 describe("LEARNING_TIMEOUT_MS", () => {
   it("é 30 segundos por padrão", () => {
     assert.equal(LEARNING_TIMEOUT_MS, 30_000);
+  });
+});
+
+// --- 014-request-tracing: logLearningOutcome inside and outside a request ---
+
+describe("logLearningOutcome (014, FR-022)", () => {
+  const learned = { kind: "learned", userId: "ana", result: { created: true, memoryId: "m1" } } as never;
+  const failed = { kind: "failed", userId: "ana", stage: "distill", error: new RangeError("segredo") } as never;
+  const skipped = { kind: "skipped", userId: "ana", reason: "no-learning" } as never;
+
+  function inRequest(fn: () => void): any[] {
+    const lines: string[] = [];
+    const logger = createLogger({ sink: (l) => void lines.push(l), now: () => new Date(0) });
+    runWithRequestContext({ requestId: "r1", logger }, fn);
+    return lines.map((l) => JSON.parse(l));
+  }
+
+  it("inside a request: learned and failed become metadata-only JSON lines with the requestId", () => {
+    const lines = inRequest(() => {
+      logLearningOutcome(learned);
+      logLearningOutcome(failed);
+      logLearningOutcome(skipped);
+    });
+    assert.equal(lines.length, 2);
+    assert.deepEqual(lines[0], { ts: "1970-01-01T00:00:00.000Z", level: "info", event: "learning.learned", requestId: "r1", userId: "ana", memoryId: "m1", created: true });
+    assert.deepEqual(lines[1], { ts: "1970-01-01T00:00:00.000Z", level: "warn", event: "learning.failed", requestId: "r1", userId: "ana", stage: "distill", errorName: "RangeError" });
+  });
+
+  it("outside a request: keeps today's console lines", () => {
+    const info = mock.method(console, "info", () => {});
+    const error = mock.method(console, "error", () => {});
+    try {
+      logLearningOutcome(learned);
+      logLearningOutcome(failed);
+      logLearningOutcome(skipped);
+      assert.equal(info.mock.calls.length, 1);
+      assert.match(String(info.mock.calls[0]!.arguments[0]), /^Refletor de aprendizado: fato guardado \(userId: ana, memoryId: m1\)\.$/);
+      assert.equal(error.mock.calls.length, 1);
+      assert.match(String(error.mock.calls[0]!.arguments[0]), /^Refletor de aprendizado falhou \(userId: ana, etapa: distill\):/);
+    } finally {
+      info.mock.restore();
+      error.mock.restore();
+    }
   });
 });

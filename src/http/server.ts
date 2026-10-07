@@ -19,7 +19,12 @@ import { SUMMARY_TIMEOUT_MS } from "../context/conversation-context.ts";
 import type { Router } from "../agents/router.ts";
 import { ROUTER_TIMEOUT_MS, createModelRouter } from "../agents/router.ts";
 import { createChatHandler } from "./chat.ts";
-import { toErrorBody } from "./errors.ts";
+import { toErrorBody, withRequestId } from "./errors.ts";
+import { createRequestTracking, getObs } from "./request-tracking.ts";
+import { createGetRequestHandler } from "./requests.ts";
+import { errorName, runWithRequestContext, silentLogger, type Logger } from "../obs/logger.ts";
+import { SqliteRequestStore, type RequestStore } from "../obs/request-store.ts";
+import { randomUUID } from "node:crypto";
 
 /**
  * Injectable dependencies (R-007, FR-022): production defaults below, and
@@ -74,6 +79,23 @@ export interface ChatAppDeps {
   router?: Router;
   /** 012-unified-graph, FR-011: independent of `timeoutMs` — default `ROUTER_TIMEOUT_MS` (15s). */
   routerTimeoutMs?: number;
+  /**
+   * 014-request-tracing: durable record + trace of every `/chat` request,
+   * read back by `GET /requests/:id`. Default: its own `:memory:` SQLite,
+   * isolated per app like `memoryStore` — production injects one over the
+   * real database file.
+   */
+  requestStore?: RequestStore;
+  /**
+   * 014-request-tracing, LG6: where the JSON log lines go. Default is
+   * silent, so tests never spill into the runner's stdout; `src/index.ts`
+   * is the only place that turns real logging on.
+   */
+  logger?: Logger;
+  /** 014-request-tracing, FR-001: default `crypto.randomUUID`; tests inject a sequence. */
+  generateRequestId?: () => string;
+  /** 014-request-tracing: clock for `receivedAt`/`durationMs`; tests inject a controlled one. */
+  now?: () => Date;
 }
 
 /**
@@ -95,14 +117,20 @@ export function createApp(deps: ChatAppDeps = {}): Express {
   const summaryTimeoutMs = deps.summaryTimeoutMs ?? SUMMARY_TIMEOUT_MS;
   const router = deps.router ?? createModelRouter();
   const routerTimeoutMs = deps.routerTimeoutMs ?? ROUTER_TIMEOUT_MS;
+  const requestStore = deps.requestStore ?? new SqliteRequestStore(new DatabaseSync(":memory:"));
+  const logger = deps.logger ?? silentLogger;
+  const generateRequestId = deps.generateRequestId ?? randomUUID;
+  const now = deps.now ?? (() => new Date());
 
   const learn = createLearningReflector({ memoryStore, distiller, timeoutMs: learningTimeoutMs });
 
   const app = express();
-  app.use(express.json());
-
+  // 014-request-tracing (research R-002): the tracking middleware goes
+  // BEFORE the JSON parser, so even a malformed body gets `X-Request-Id`.
   app.post(
     "/chat",
+    createRequestTracking({ requestStore, logger, now, generateRequestId }),
+    express.json(),
     createChatHandler({
       store,
       conversationStore,
@@ -115,8 +143,13 @@ export function createApp(deps: ChatAppDeps = {}): Express {
       summaryTimeoutMs,
       router,
       routerTimeoutMs,
+      requestStore,
+      logger,
+      now,
     }),
   );
+
+  app.get("/requests/:id", createGetRequestHandler(requestStore));
 
   // Registered after the routes, as Express requires for a 4-arg error
   // handler to be recognized as one.
@@ -130,16 +163,36 @@ export function createApp(deps: ChatAppDeps = {}): Express {
     // as the same invalid_body every other validation failure uses,
     // instead of letting Express's default HTML error page leak past
     // FR-016/FR-017.
+    const obs = getObs(res);
+    // 014-request-tracing: the id is on every error body (FR-003) and the
+    // code is handed to the middleware's `finish` hook, which records it.
+    const errorBody = (code: "invalid_body" | "internal", message: string) => {
+      if (!obs) return toErrorBody(code, message);
+      obs.errorCode = code;
+      return withRequestId(toErrorBody(code, message), obs.requestId);
+    };
     if (error instanceof SyntaxError && "status" in error && (error as { status?: unknown }).status === 400) {
-      res.status(400).json(toErrorBody("invalid_body", "Corpo da requisição não é um JSON válido."));
+      res.status(400).json(errorBody("invalid_body", "Corpo da requisição não é um JSON válido."));
       return;
     }
     // Any other unexpected failure (FR-017): no stack, no exception
     // message, in the response BODY — but it still needs to be visible
     // *somewhere*, or every 500 is a silent dead end for whoever runs the
     // server. Logged server-side only, never sent to the client.
-    console.error("POST /chat falhou com erro inesperado:", error);
-    res.status(500).json(toErrorBody("internal", "Erro interno ao processar a requisição."));
+    //
+    // 014-request-tracing, FR-022/FR-023: now one metadata-only JSON line
+    // (class name + request id) instead of the exception object. The
+    // message and stack are deliberately NOT logged — the accepted cost of
+    // "metadata only"; the request id leads to the saved trace and the
+    // conversation, which is what reproduces the defect (research R-005).
+    if (obs) {
+      runWithRequestContext({ requestId: obs.requestId, logger }, () => {
+        logger.error("request.internal_error", { errorName: errorName(error) });
+      });
+    } else {
+      console.error("POST /chat falhou com erro inesperado:", error);
+    }
+    res.status(500).json(errorBody("internal", "Erro interno ao processar a requisição."));
   };
   app.use(errorHandler);
 

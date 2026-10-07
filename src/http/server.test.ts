@@ -2067,3 +2067,354 @@ describe("POST /chat — 013 US3 (model_unavailable)", () => {
     });
   });
 });
+
+// --- 014-request-tracing -----------------------------------------------------
+//
+// Deterministic ids, a controlled clock, an in-memory request store and a
+// logger whose sink captures lines — nothing here reaches a provider.
+
+import { createLogger } from "../obs/logger.ts";
+import { SqliteRequestStore, type RequestStore } from "../obs/request-store.ts";
+import { logLearningOutcome } from "../memory/learning-reflector.ts";
+import { ModelUnavailableError } from "../agents/model.ts";
+
+function sequentialIds(): () => string {
+  let n = 0;
+  return () => `req-${++n}`;
+}
+
+function captureLogger(): { logger: ReturnType<typeof createLogger>; lines: string[]; parsed: () => any[] } {
+  const lines: string[] = [];
+  const logger = createLogger({ sink: (l) => void lines.push(l), now: () => new Date("2026-10-07T12:00:00.000Z") });
+  return { logger, lines, parsed: () => lines.map((l) => JSON.parse(l)) };
+}
+
+function newRequestStore(): RequestStore {
+  return new SqliteRequestStore(new DatabaseSync(":memory:"));
+}
+
+function getRequest(baseUrl: string, id: string): Promise<Response> {
+  return fetch(`${baseUrl}/requests/${encodeURIComponent(id)}`);
+}
+
+const okStrategy = () => recordingResolveStrategy(fakeStrategy("react", async () => fixedResult())).resolveStrategy;
+
+describe("014: requestId (US1)", () => {
+  it("RT1: 200 carries X-Request-Id and the same requestId in the body", async () => {
+    await withServer({ resolveStrategy: okStrategy(), generateRequestId: sequentialIds() }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      assert.equal(res.status, 200);
+      const body = await jsonOf(res);
+      assert.equal(res.headers.get("x-request-id"), "req-1");
+      assert.equal(body.requestId, "req-1");
+    });
+  });
+
+  it("RT1/RT5: every error status carries the header and requestId, with the same error as before", async () => {
+    const throwing = (error: Error) => recordingResolveStrategy(fakeStrategy("react", async () => { throw error; })).resolveStrategy;
+    const cases: Array<{ name: string; deps: ChatAppDeps; send: (b: string) => Promise<Response>; status: number; code: string }> = [
+      { name: "400 invalid body", deps: {}, send: (b) => postChat(b, { message: "" }), status: 400, code: "invalid_body" },
+      { name: "400 malformed JSON", deps: {}, send: (b) => postChat(b, '{"message":'), status: 400, code: "invalid_body" },
+      { name: "404", deps: {}, send: (b) => postChat(b, { message: "oi", conversationId: "nao-existe" }), status: 404, code: "conversation_not_found" },
+      { name: "422", deps: {}, send: (b) => postChat(b, { message: "oi", strategy: "x" }), status: 422, code: "unknown_strategy" },
+      {
+        name: "504",
+        deps: { resolveStrategy: recordingResolveStrategy(fakeStrategy("react", () => new Promise<StrategyResult>(() => {}))).resolveStrategy, timeoutMs: 30 },
+        send: (b) => postChat(b, { message: "oi" }), status: 504, code: "timeout",
+      },
+      {
+        name: "503",
+        deps: { resolveStrategy: throwing(new ModelUnavailableError(["a", "b"], "non_transient")) },
+        send: (b) => postChat(b, { message: "oi" }), status: 503, code: "model_unavailable",
+      },
+      { name: "500", deps: { resolveStrategy: throwing(new Error("boom")) }, send: (b) => postChat(b, { message: "oi" }), status: 500, code: "internal" },
+    ];
+    for (const c of cases) {
+      await withServer({ generateRequestId: sequentialIds(), ...c.deps }, async (baseUrl) => {
+        const res = await c.send(baseUrl);
+        const body = await jsonOf(res);
+        assert.equal(res.status, c.status, c.name);
+        assert.equal(body.error.code, c.code, c.name);
+        assert.equal(res.headers.get("x-request-id"), "req-1", c.name);
+        assert.equal(body.requestId, "req-1", c.name);
+      });
+    }
+  });
+
+  it("concurrent requests get distinct ids", async () => {
+    await withServer({ resolveStrategy: okStrategy(), generateRequestId: sequentialIds() }, async (baseUrl) => {
+      const results = await Promise.all([1, 2, 3, 4].map(() => postChat(baseUrl, { message: "oi" }).then(jsonOf)));
+      assert.equal(new Set(results.map((r) => r.requestId)).size, 4);
+    });
+  });
+
+  it("RT2: a client-sent X-Request-Id is ignored", async () => {
+    await withServer({ resolveStrategy: okStrategy(), generateRequestId: sequentialIds() }, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Request-Id": "cliente" },
+        body: JSON.stringify({ message: "oi" }),
+      });
+      assert.equal(res.headers.get("x-request-id"), "req-1");
+      assert.equal((await jsonOf(res)).requestId, "req-1");
+    });
+  });
+
+  it("the default id is a UUID v4", async () => {
+    await withServer({ resolveStrategy: okStrategy() }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      assert.match(res.headers.get("x-request-id") ?? "", /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    });
+  });
+});
+
+describe("014: GET /requests/:id (US2)", () => {
+  it("RQ1/RT3: a 200 is queryable right after, with a trace deep-equal to the one delivered", async () => {
+    await withServer({ resolveStrategy: okStrategy(), generateRequestId: sequentialIds(), requestStore: newRequestStore() }, async (baseUrl) => {
+      const chat = await jsonOf(await postChat(baseUrl, { message: "oi", userId: "ana" }));
+      const res = await getRequest(baseUrl, chat.requestId);
+      assert.equal(res.status, 200);
+      const found = await jsonOf(res);
+      assert.deepEqual(found.trace, chat.trace);
+      assert.ok(found.trace.every((e: { nodeName?: string }) => typeof e.nodeName === "string"));
+      assert.equal(found.request.requestId, chat.requestId);
+      assert.equal(found.request.status, 200);
+      assert.equal(found.request.errorCode, null);
+      assert.equal(found.request.conversationId, chat.conversationId);
+      assert.equal(found.request.userId, "ana");
+      assert.equal(found.request.strategy, "react");
+      assert.equal(found.request.routeSource, "router");
+      assert.equal(found.request.llmCalls, chat.metrics.llmCalls);
+      assert.equal(found.request.traceEvents, chat.trace.length);
+    });
+  });
+
+  it("RQ2: every key of `request` is present, unknowns as null", async () => {
+    await withServer({ resolveStrategy: okStrategy(), generateRequestId: sequentialIds() }, async (baseUrl) => {
+      await postChat(baseUrl, { message: "oi" });
+      const found = await jsonOf(await getRequest(baseUrl, "req-1"));
+      assert.deepEqual(Object.keys(found.request).sort(), [
+        "conversationId", "durationMs", "errorCode", "historyMessages", "llmCalls", "modelUsed", "promptTokens",
+        "recalledMemories", "receivedAt", "requestId", "route", "routeSource", "status", "stoppedReason",
+        "strategy", "summaryCoveredMessages", "traceEvents", "userId",
+      ]);
+      assert.equal(found.request.userId, null);
+      assert.equal(found.request.promptTokens, null);
+    });
+  });
+
+  it("an error request is recorded with its status and code and an empty trace", async () => {
+    await withServer({ generateRequestId: sequentialIds() }, async (baseUrl) => {
+      await postChat(baseUrl, { message: "oi", strategy: "x" });
+      await postChat(baseUrl, '{"message":');
+      await delay(20); // errors are recorded on `finish`, which can land just after the client reads the body
+      const a = await jsonOf(await getRequest(baseUrl, "req-1"));
+      assert.equal(a.request.status, 422);
+      assert.equal(a.request.errorCode, "unknown_strategy");
+      assert.deepEqual(a.trace, []);
+      assert.equal(a.request.traceEvents, 0);
+      const b = await jsonOf(await getRequest(baseUrl, "req-2"));
+      assert.equal(b.request.status, 400);
+      assert.equal(b.request.errorCode, "invalid_body");
+    });
+  });
+
+  it("a 504 stays a 504 with no trace even if the run finishes afterwards", async () => {
+    const resolveStrategy = recordingResolveStrategy(fakeStrategy("react", async () => { await delay(80); return fixedResult(); })).resolveStrategy;
+    await withServer({ resolveStrategy, timeoutMs: 30, generateRequestId: sequentialIds() }, async (baseUrl) => {
+      await postChat(baseUrl, { message: "oi" });
+      await delay(150);
+      const found = await jsonOf(await getRequest(baseUrl, "req-1"));
+      assert.equal(found.request.status, 504);
+      assert.equal(found.request.errorCode, "timeout");
+      assert.equal(found.request.traceEvents, 0);
+      assert.deepEqual(found.trace, []);
+    });
+  });
+
+  it("RQ3: an unknown or odd id is 404 request_not_found", async () => {
+    await withServer({}, async (baseUrl) => {
+      for (const id of ["nao-existe", " ", "x".repeat(300), "a%2Fb"]) {
+        const res = await fetch(`${baseUrl}/requests/${id.includes("%") ? id : encodeURIComponent(id)}`);
+        assert.equal(res.status, 404, id);
+        assert.equal((await jsonOf(res)).error.code, "request_not_found");
+      }
+    });
+  });
+
+  it("RQ4: the GET writes no record and has no X-Request-Id", async () => {
+    await withServer({ resolveStrategy: okStrategy(), generateRequestId: sequentialIds() }, async (baseUrl) => {
+      await postChat(baseUrl, { message: "oi" });
+      const res = await getRequest(baseUrl, "req-1");
+      assert.equal(res.headers.get("x-request-id"), null);
+      assert.equal((await getRequest(baseUrl, "req-2")).status, 404);
+    });
+  });
+
+  it("RT4: a failing store changes nothing the client sees, and the turn is still recorded", async () => {
+    const conversationStore = new InMemoryConversationStore();
+    const throwingStore: RequestStore = { record() { throw new Error("disk full"); }, get() { return undefined; } };
+    const cap = captureLogger();
+    await withServer({ resolveStrategy: okStrategy(), conversationStore, requestStore: throwingStore, logger: cap.logger, generateRequestId: sequentialIds() }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      assert.equal(res.status, 200);
+      const body = await jsonOf(res);
+      assert.equal(body.requestId, "req-1");
+      assert.equal(conversationStore.countMessages(body.conversationId), 2);
+    });
+    const failed = cap.parsed().filter((l) => l.event === "request.persist_failed");
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0].requestId, "req-1");
+    assert.equal(failed[0].errorName, "Error");
+  });
+
+  it("a failing store still lets the learning reflector fire (FR-012)", async () => {
+    const throwingStore: RequestStore = { record() { throw new Error("x"); }, get() { return undefined; } };
+    const probe = learningProbe();
+    const memoryStore = fakeMemoryStore({ "sou do checkout": queryVector(), "fato": queryVector() });
+    await withServer(
+      { resolveStrategy: okStrategy(), requestStore: throwingStore, memoryStore, distiller: fixedDistiller({ hasLearning: true, fact: "fato" }), onLearning: probe.onLearning },
+      async (baseUrl) => {
+        await postChat(baseUrl, { message: "sou do checkout", userId: "ana" });
+        assert.equal((await probe.next).kind, "learned");
+      },
+    );
+  });
+});
+
+describe("014: logs (US3)", () => {
+  it("a 200 logs request.start, one trace.event per event, then request.end (FR-021)", async () => {
+    const cap = captureLogger();
+    let chat: any;
+    await withServer({ resolveStrategy: okStrategy(), logger: cap.logger, generateRequestId: sequentialIds() }, async (baseUrl) => {
+      chat = await jsonOf(await postChat(baseUrl, { message: "oi" }));
+      await delay(20);
+    });
+    const lines = cap.parsed();
+    assert.equal(lines[0].event, "request.start");
+    assert.equal(lines[0].method, "POST");
+    assert.equal(lines[0].path, "/chat");
+    const events = lines.filter((l) => l.event === "trace.event");
+    assert.equal(events.length, chat.trace.length);
+    events.forEach((l, i) => {
+      assert.equal(l.position, i);
+      assert.equal(l.type, chat.trace[i].type);
+      assert.equal(l.nodeName, chat.trace[i].nodeName ?? null);
+    });
+    const end = lines[lines.length - 1];
+    assert.equal(end.event, "request.end");
+    assert.equal(end.status, 200);
+    assert.equal(end.stoppedReason, "completed");
+    assert.equal(end.llmCalls, 2);
+    assert.equal(end.traceEvents, chat.trace.length);
+    assert.equal(end.strategy, "react");
+    assert.equal(end.routeSource, "router");
+    assert.equal(typeof end.durationMs, "number");
+  });
+
+  it("a 422 logs start and end with the error code and no trace.event", async () => {
+    const cap = captureLogger();
+    await withServer({ logger: cap.logger, generateRequestId: sequentialIds() }, async (baseUrl) => {
+      await postChat(baseUrl, { message: "oi", strategy: "x" });
+      await delay(20);
+    });
+    const lines = cap.parsed();
+    assert.deepEqual(lines.map((l) => l.event), ["request.start", "request.end"]);
+    assert.equal(lines[1].status, 422);
+    assert.equal(lines[1].errorCode, "unknown_strategy");
+  });
+
+  it("LG2: every line of a request, including the reflector's after the response, carries its requestId", async () => {
+    const cap = captureLogger();
+    const probe = learningProbe();
+    const memoryStore = fakeMemoryStore({ "oi": queryVector(), "fato": queryVector() });
+    await withServer(
+      {
+        resolveStrategy: okStrategy(), logger: cap.logger, generateRequestId: sequentialIds(), memoryStore,
+        distiller: fixedDistiller({ hasLearning: true, fact: "fato" }),
+        onLearning: (o) => { logLearningOutcome(o); probe.onLearning(o); },
+      },
+      async (baseUrl) => {
+        await postChat(baseUrl, { message: "oi", userId: "ana" });
+        await probe.next;
+        await delay(20);
+      },
+    );
+    const lines = cap.parsed();
+    assert.ok(lines.some((l) => l.event === "learning.learned"));
+    assert.ok(lines.every((l) => l.requestId === "req-1"), JSON.stringify(lines));
+  });
+
+  it("handled failures become JSON lines with the requestId (router, memory, summary)", async () => {
+    const cap = captureLogger();
+    const brokenMemory = { ...fakeMemoryStore(), recall: async () => { throw new TypeError("segredo-memoria"); } } as unknown as MemoryStore;
+    const conversationStore = new InMemoryConversationStore();
+    const conversationId = conversationStore.create();
+    for (let i = 0; i < 12; i++) conversationStore.append(conversationId, [{ role: "user", content: `u${i}` }, { role: "assistant", content: `a${i}` }]);
+    await withServer(
+      {
+        resolveStrategy: okStrategy(), logger: cap.logger, generateRequestId: sequentialIds(), conversationStore,
+        router: rejectingRouter(new RangeError("segredo-roteador")), summarizer: rejectingSummarizer(new SyntaxError("segredo-resumo")),
+        memoryStore: brokenMemory,
+      },
+      async (baseUrl) => {
+        const res = await postChat(baseUrl, { message: "oi", userId: "ana", conversationId });
+        assert.equal(res.status, 200);
+      },
+    );
+    const byEvent = (e: string) => cap.parsed().find((l) => l.event === e);
+    assert.deepEqual([byEvent("router.failed")?.errorName, byEvent("router.failed")?.requestId], ["RangeError", "req-1"]);
+    assert.deepEqual([byEvent("memory.recall_failed")?.errorName, byEvent("memory.recall_failed")?.requestId], ["TypeError", "req-1"]);
+    assert.deepEqual([byEvent("summary.failed")?.errorName, byEvent("summary.failed")?.requestId], ["SyntaxError", "req-1"]);
+    for (const secret of ["segredo-roteador", "segredo-memoria", "segredo-resumo"]) {
+      assert.equal(cap.lines.some((l) => l.includes(secret)), false, secret);
+    }
+  });
+
+  it("a 500 logs request.internal_error with the class name only, never the message", async () => {
+    const cap = captureLogger();
+    const resolveStrategy = recordingResolveStrategy(fakeStrategy("react", async () => { throw new Error("SEGREDO"); })).resolveStrategy;
+    await withServer({ resolveStrategy, logger: cap.logger, generateRequestId: sequentialIds() }, async (baseUrl) => {
+      const res = await postChat(baseUrl, { message: "oi" });
+      assert.equal(res.status, 500);
+      await delay(20);
+    });
+    const internal = cap.parsed().find((l) => l.event === "request.internal_error");
+    assert.equal(internal?.errorName, "Error");
+    assert.equal(internal?.requestId, "req-1");
+    assert.equal(cap.lines.some((l) => l.includes("SEGREDO")), false);
+  });
+
+  it("LG1/LG3: no line contains the message or the answer, and every line is valid JSON", async () => {
+    const cap = captureLogger();
+    const answer = "RESPOSTA-9b1c";
+    const strategy = fakeStrategy("react", async () =>
+      fixedResult({ answer, trace: [{ type: "thought", content: "pensando-MARCADOR" }, { type: "answer", content: answer }] }));
+    await withServer({ resolveStrategy: recordingResolveStrategy(strategy).resolveStrategy, logger: cap.logger, generateRequestId: sequentialIds() }, async (baseUrl) => {
+      await postChat(baseUrl, { message: 'MARCADOR-7f3a\nlinha2 "aspas"', userId: "ana" });
+      await delay(20);
+    });
+    assert.ok(cap.lines.length >= 3);
+    for (const line of cap.lines) {
+      assert.doesNotThrow(() => JSON.parse(line));
+      assert.equal(line.includes("\n"), false);
+      assert.equal(line.includes("MARCADOR"), false);
+      assert.equal(line.includes(answer), false);
+    }
+  });
+
+  it("LG6: createApp without a logger writes nothing to stdout", async () => {
+    const { mock } = await import("node:test");
+    const write = mock.method(process.stdout, "write", () => true);
+    try {
+      await withServer({ resolveStrategy: okStrategy() }, async (baseUrl) => {
+        await postChat(baseUrl, { message: "oi" });
+        await postChat(baseUrl, { message: "" });
+      });
+      const jsonLines = write.mock.calls.map((c) => String(c.arguments[0])).filter((s) => s.startsWith('{"ts"'));
+      assert.deepEqual(jsonLines, []);
+    } finally {
+      write.mock.restore();
+    }
+  });
+});

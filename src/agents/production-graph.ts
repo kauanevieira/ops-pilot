@@ -1,4 +1,5 @@
 import { Annotation, END, START, StateGraph, type LangGraphRunnableConfig } from "@langchain/langgraph";
+import { errorName, logInRequest } from "../obs/logger.ts";
 import type { Route, NodeName, RecalledMemory } from "../domain/schemas.ts";
 import { routeDecisionSchema } from "../domain/schemas.ts";
 import type { StrategySelection, ResolveStrategy } from "./index.ts";
@@ -219,7 +220,10 @@ export function createProductionGraph(deps: ProductionGraphDeps): {
               memories = recalled;
             })
             .catch((error: unknown) => {
-              console.error("Falha ao recuperar memória semântica:", error);
+              logInRequest(
+                (log) => log.warn("memory.recall_failed", { errorName: errorName(error) }),
+                () => console.error("Falha ao recuperar memória semântica:", error),
+              );
             })
         : Promise.resolve(),
     ]);
@@ -280,7 +284,10 @@ export function createProductionGraph(deps: ProductionGraphDeps): {
         // recovered from — it has to propagate so the handler's own race
         // against its deadline still resolves as a 504.
         if (config.signal?.aborted) throw error;
-        console.error("Falha ao rotear pedido:", error);
+        logInRequest(
+          (log) => log.warn("router.failed", { errorName: errorName(error) }),
+          () => console.error("Falha ao rotear pedido:", error),
+        );
       }
 
       if (decided) {

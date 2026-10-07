@@ -10,6 +10,8 @@ import { createModelDistiller } from "./memory/distiller.ts";
 import { createModelSummarizer } from "./context/summarizer.ts";
 import { createModelRouter } from "./agents/router.ts";
 import { baselineState } from "./store/seed.ts";
+import { createLogger } from "./obs/logger.ts";
+import { SqliteRequestStore } from "./obs/request-store.ts";
 
 /**
  * `PORT` is external input like any other (a CLI flag, an HTTP body) and
@@ -67,10 +69,18 @@ function main(): void {
   // actually invokes it.
   const router = createModelRouter();
 
-  const app = createApp({ store, conversationStore, memoryStore, distiller, summarizer, router });
+  // 014-request-tracing: same file/connection as the other stores; the DDL
+  // for `requests`/`trace_events` is applied by this store's constructor.
+  const requestStore = new SqliteRequestStore(db);
+
+  // 014-request-tracing: the one place real logging is switched on —
+  // `createApp` defaults to a silent logger so tests stay quiet (LG6).
+  const logger = createLogger();
+
+  const app = createApp({ store, conversationStore, memoryStore, distiller, summarizer, router, requestStore, logger });
 
   app.listen(port, () => {
-    console.log(`OpsPilot ouvindo em http://localhost:${port}`);
+    logger.info("server.listening", { port });
   });
 }
 

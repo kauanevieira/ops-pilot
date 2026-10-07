@@ -213,3 +213,89 @@ export const RETRYABLE_FAILURES: ReadonlySet<FailureKind> = new Set(["rate_limit
 
 /** Validates `OPENROUTER_MODEL`/`OPENROUTER_MODEL_FALLBACK` when read (Constitution, boundary validation). */
 export const modelIdSchema = z.string().trim().min(1);
+
+// --- 014-request-tracing -------------------------------------------------
+
+/**
+ * Closed set of `TraceEvent["type"]` (kept in sync with the union in
+ * `trace/types.ts` by a compile-time assertion there). Also the `CHECK`
+ * list of `trace_events.type` — a new event type means updating this enum
+ * AND `REQUEST_SCHEMA_SQL`; a test compares both.
+ */
+export const traceEventTypeSchema = z.enum([
+  "thought",
+  "action",
+  "observation",
+  "plan",
+  "critique",
+  "answer",
+  "summarize",
+  "route",
+  "fallback",
+]);
+export type TraceEventType = z.infer<typeof traceEventTypeSchema>;
+
+export const stoppedReasonSchema = z.enum(["completed", "max-iterations", "max-steps", "max-reflections"]);
+
+/** The full strategy combination, in the registry's vocabulary (the `route` event's `strategy`). */
+export const strategyLabelSchema = z.enum(["react", "plan-and-execute", "reflect:react", "reflect:plan-and-execute"]);
+export type StrategyLabel = z.infer<typeof strategyLabelSchema>;
+
+/** Every `code` an HTTP error body of this API can carry (003, 013, 014). */
+export const chatErrorCodeSchema = z.enum([
+  "invalid_body",
+  "unknown_strategy",
+  "conversation_not_found",
+  "timeout",
+  "internal",
+  "model_unavailable",
+  "request_not_found",
+]);
+export type ChatErrorCode = z.infer<typeof chatErrorCodeSchema>;
+
+/** The HTTP statuses a `POST /chat` request can end with. */
+export const requestStatusSchema = z.union([
+  z.literal(200),
+  z.literal(400),
+  z.literal(404),
+  z.literal(422),
+  z.literal(500),
+  z.literal(503),
+  z.literal(504),
+]);
+export type RequestStatus = z.infer<typeof requestStatusSchema>;
+
+export const requestIdSchema = z.string().min(1);
+
+const counter = z.number().int().nonnegative();
+
+/**
+ * One row per `POST /chat` request (data-model.md). Metrics and outcome
+ * only — never the message or answer text (FR-007). Unknown values are
+ * `null`, with the key always present.
+ */
+export const requestRecordSchema = z
+  .object({
+    requestId: requestIdSchema,
+    receivedAt: z.date(),
+    durationMs: counter,
+    status: requestStatusSchema,
+    errorCode: chatErrorCodeSchema.nullable(),
+    conversationId: z.string().nullable(),
+    userId: z.string().nullable(),
+    route: routeSchema.nullable(),
+    strategy: strategyLabelSchema.nullable(),
+    routeSource: routeSourceSchema.nullable(),
+    stoppedReason: stoppedReasonSchema.nullable(),
+    llmCalls: counter.nullable(),
+    promptTokens: counter.nullable(),
+    modelUsed: z.string().nullable(),
+    historyMessages: counter.nullable(),
+    summaryCoveredMessages: counter.nullable(),
+    recalledMemories: counter.nullable(),
+    traceEvents: counter,
+  })
+  .refine((r) => (r.status === 200) === (r.errorCode === null), {
+    message: "errorCode deve ser nulo se e somente se status for 200.",
+  });
+export type RequestRecord = z.infer<typeof requestRecordSchema>;
